@@ -1,14 +1,15 @@
+export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
+import { getSession } from '@/lib/session'
+import sql from '@/lib/db'
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = createServerSupabase()
-
-    const { data: { user }, error: authErr } = await supabase.auth.getUser()
-    if (authErr || !user) {
+    const session = await getSession()
+    if (!session?.user) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
+    const user = session.user
 
     const body = await req.json()
     const { endpoint } = body
@@ -17,16 +18,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Endpoint obrigatório' }, { status: 400 })
     }
 
-    const { error } = await supabase
-      .from('push_subscriptions')
-      .delete()
-      .eq('user_id', user.id)
-      .eq('endpoint', endpoint)
-
-    if (error) {
-      console.error('[Push Unsubscribe] Erro:', error)
-      return NextResponse.json({ error: 'Erro ao remover inscrição' }, { status: 500 })
-    }
+    // Delete via PostgreSQL Docker
+    await sql`
+      DELETE FROM push_subscriptions
+      WHERE user_id = ${user.id} AND endpoint = ${endpoint}
+    `
 
     return NextResponse.json({ success: true })
   } catch (err: any) {
@@ -34,3 +30,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
   }
 }
+

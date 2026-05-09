@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Plus, Trash2, Save, PackagePlus, ListPlus, Info, HelpCircle, BookOpen } from 'lucide-react'
 import ProjectGuidelineModal from '@/components/ProjectGuidelineModal'
@@ -80,7 +79,6 @@ export default function NovoProjetoPage() {
   const [dataInicio, setDataInicio] = useState('')
 
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     const hideGuideline = localStorage.getItem('hideProjectGuidelineV2')
@@ -97,41 +95,38 @@ export default function NovoProjetoPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
-      const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-      if (p) {
-        setProfile(p as any)
-        if (p.role === 'gestor' && p.setor_id) setSetorLiderId(p.setor_id)
+      const sessionRes = await fetch('/api/auth/session')
+      if (!sessionRes.ok) { router.push('/login'); return }
+      const session = await sessionRes.json()
+      if (!session.user) { router.push('/login'); return }
+
+      // Dados do formulário via PostgreSQL Docker
+      const res = await fetch('/api/dados/projeto')
+      if (!res.ok) { router.push('/dashboard/projetos'); return }
+      const data = await res.json()
+
+      if (data.profile) {
+        setProfile(data.profile as any)
+        if (data.profile.role === 'gestor' && data.profile.setor_id) {
+          setSetorLiderId(data.profile.setor_id)
+        }
       }
 
-      const { data: s } = await supabase.from('setores').select('id, codigo, nome_completo').order('codigo')
-      if (s) setSetores(s)
-
-      const { data: usersData } = await supabase.from('profiles')
-        .select('id, nome, email, role, setor_id, setores:setor_id(codigo)')
-        .in('role', ['gestor', 'master', 'usuario'])
-        .eq('ativo', true)
-        .order('nome')
-      if (usersData) setEligibleUsers(usersData.map((u: any) => ({
-        id: u.id, nome: u.nome, email: u.email, role: u.role,
-        setor_id: u.setor_id, setor_codigo: u.setores?.codigo || null
+      if (data.setores) setSetores(data.setores)
+      if (data.usuarios) setEligibleUsers(data.usuarios.map((u: any) => ({
+        id: u.id, nome: u.nome, email: u.email || '', role: u.role || '',
+        setor_id: u.setor_id, setor_codigo: u.setores?.codigo || null,
       })))
-
-      const { data: a } = await supabase.from('acoes_estrategicas').select('id, numero, nome').order('numero')
-      if (a) setAcoes(a)
-
-      // Carregar configurações e verificar permissão
-      const { data: cfgs } = await supabase.from('configuracoes').select('chave, valor')
-      const cfgMap: Record<string, string> = {}
-      cfgs?.forEach((c: any) => { cfgMap[c.chave] = c.valor })
-      setConfigs(cfgMap)
-
-      // Verificar se gestor tem permissão de cadastro
-      if (p && p.role === 'gestor' && cfgMap['proj_permitir_cadastro'] === 'false') {
-        alert('O cadastro de projetos está desabilitado no momento.')
-        router.push('/dashboard/projetos')
-        return
+      if (data.acoes) setAcoes(data.acoes.map((a: any) => ({
+        id: a.id, numero: a.numero, nome: a.nome,
+      })))
+      if (data.configuracoes) {
+        setConfigs(data.configuracoes)
+        if (data.profile?.role === 'gestor' && data.configuracoes['proj_permitir_cadastro'] === 'false') {
+          alert('O cadastro de projetos está desabilitado no momento.')
+          router.push('/dashboard/projetos')
+          return
+        }
       }
 
       setLoading(false)
@@ -367,164 +362,60 @@ export default function NovoProjetoPage() {
 
     setSaving(true)
     try {
-      const { data: proj, error: projErr } = await supabase.from('projetos').insert({
-        nome: nome.trim(), descricao: descricao.trim(), problema_resolve: problemaResolve.trim(),
-        causas: causas.trim(), consequencias_diretas: consequenciasDiretas.trim(), objetivos: objetivos.trim(),
-        responsavel_id: responsavelId,
-        data_inicio: dataInicio || null,
-        dependencias_projetos: dependenciasProjetos.trim() || null,
-        tipo_acao: tipoAcao.length > 0 ? tipoAcao : null,
-        setor_lider_id: setorLiderId, criado_por: profile!.id
-      }).select().single()
-      if (projErr) throw projErr
+      // Criação completa via PostgreSQL Docker (projeto + entregas + atividades + audit + alertas)
+      const entregasPayload = entregas.map(e => ({
+        nome: e.nome.trim(),
+        descricao: e.descricao.trim(),
+        criterios_aceite: e.criterios_aceite.trim(),
+        dependencias_criticas: e.dependencias_criticas.trim() || null,
+        data_final_prevista: e.quinzena || null,
+        status: e.status,
+        motivo_status: e.motivo_status.trim() || null,
+        orgao_responsavel_setor_id: e.orgao_responsavel_setor_id || null,
+        responsavel_entrega_id: e.responsavel_entrega_id || null,
+        resultado_descricao: e.resultado_descricao.trim() || null,
+        participantes: e.participantes.filter(p => p.papel.trim()),
+        atividades: e.atividades.map(a => ({
+          nome: a.nome.trim(),
+          descricao: a.descricao.trim(),
+          data_prevista: a.data_prevista || null,
+          status: a.status,
+          motivo_status: a.motivo_status.trim() || null,
+          responsavel_atividade_id: a.responsavel_atividade_id || null,
+          resultado_descricao: a.resultado_descricao.trim() || null,
+          participantes: a.participantes.filter((p: any) => p.papel.trim()),
+        })),
+      }))
 
-      await supabase.from('projeto_acoes').insert(
-        acoesSelecionadas.map(aid => ({ projeto_id: proj.id, acao_estrategica_id: aid })))
-
-      // Insert indicadores
-      if (indicadoresComDados.length > 0) {
-        await supabase.from('indicadores').insert(indicadoresComDados.map(i => ({ projeto_id: proj.id, ...i })))
-      }
-
-      // Insert riscos
-      if (riscosComDados.length > 0) {
-        await supabase.from('riscos').insert(riscosComDados.map(r => ({ projeto_id: proj.id, ...r, impacto: r.impacto || null })))
-      }
-
-      await supabase.from('audit_log').insert({
-        usuario_id: profile!.id, usuario_nome: profile!.nome,
-        tipo_acao: 'create', entidade: 'projeto', entidade_id: proj.id,
-        conteudo_novo: { nome: nome.trim(), descricao: descricao.trim(), setor_lider_id: setorLiderId }
+      const res = await fetch('/api/dados/projeto', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: nome.trim(),
+          descricao: descricao.trim(),
+          problema_resolve: problemaResolve.trim(),
+          causas: causas.trim(),
+          consequencias_diretas: consequenciasDiretas.trim(),
+          objetivos: objetivos.trim(),
+          setor_lider_id: setorLiderId,
+          responsavel_id: responsavelId,
+          data_inicio: dataInicio || null,
+          dependencias_projetos: dependenciasProjetos.trim() || null,
+          tipo_acao: tipoAcao.length > 0 ? tipoAcao : null,
+          indicador_sucesso: null,
+          acoes_ids: acoesSelecionadas,
+          indicadores: indicadores.filter(i => i.nome),
+          riscos: riscos.filter(r => r.natureza),
+          entregas: entregasPayload,
+        }),
       })
 
-      // Collect all alerts to batch insert
-      const alertas: any[] = []
-
-      for (const e of entregas) {
-        const { data: ent, error: entErr } = await supabase.from('entregas').insert({
-          projeto_id: proj.id, nome: e.nome.trim(), descricao: e.descricao.trim(),
-          criterios_aceite: e.criterios_aceite.trim(),
-          dependencias_criticas: e.dependencias_criticas.trim() || null,
-          data_final_prevista: e.quinzena || null,
-          status: e.status,
-          motivo_status: e.motivo_status.trim() || null,
-          orgao_responsavel_setor_id: e.orgao_responsavel_setor_id || null,
-          responsavel_entrega_id: e.responsavel_entrega_id || null,
-          resultado_descricao: e.resultado_descricao.trim() || null,
-        }).select().single()
-        if (entErr) throw entErr
-
-        const validP = e.participantes.filter(p => p.papel.trim())
-        // Auto-incluir órgão responsável como participante se não estiver na lista
-        if (e.orgao_responsavel_setor_id && !validP.some(p => p.tipo_participante === 'setor' && p.setor_id === e.orgao_responsavel_setor_id)) {
-          validP.push({ setor_id: e.orgao_responsavel_setor_id, tipo_participante: 'setor', papel: 'Órgão responsável' })
-        }
-        if (validP.length > 0) {
-          await supabase.from('entrega_participantes').insert(
-            validP.map(p => ({
-              entrega_id: ent.id,
-              setor_id: p.tipo_participante === 'setor' ? p.setor_id : null,
-              tipo_participante: p.tipo_participante,
-              papel: p.papel.trim()
-            })))
-        }
-
-        await supabase.from('audit_log').insert({
-          usuario_id: profile!.id, usuario_nome: profile!.nome,
-          tipo_acao: 'create', entidade: 'entrega', entidade_id: ent.id,
-          conteudo_novo: { nome: e.nome.trim(), projeto_id: proj.id }
-        })
-
-        for (const a of e.atividades) {
-          const { data: ativ, error: ativErr } = await supabase.from('atividades').insert({
-            entrega_id: ent.id, nome: a.nome.trim(), descricao: a.descricao.trim(),
-            data_prevista: a.data_prevista || null,
-            status: a.status,
-            motivo_status: a.motivo_status.trim() || null,
-            responsavel_atividade_id: a.responsavel_atividade_id || null,
-            resultado_descricao: a.resultado_descricao.trim() || null,
-          }).select().single()
-          if (ativErr) throw ativErr
-
-          const validAP = a.participantes.filter(p => p.papel.trim())
-          if (validAP.length > 0) {
-            await supabase.from('atividade_participantes').insert(
-              validAP.map(p => ({
-                atividade_id: ativ.id,
-                user_id: p.tipo_participante === 'usuario' ? p.user_id : null,
-                setor_id: p.setor_id,
-                tipo_participante: p.tipo_participante,
-                papel: p.papel.trim()
-              })))
-          }
-
-          await supabase.from('audit_log').insert({
-            usuario_id: profile!.id, usuario_nome: profile!.nome,
-            tipo_acao: 'create', entidade: 'atividade', entidade_id: ativ.id,
-            conteudo_novo: { nome: a.nome.trim(), entrega_id: ent.id, projeto_id: proj.id }
-          })
-
-          // Collect alerts for atividade responsavel
-          if (a.responsavel_atividade_id && a.responsavel_atividade_id !== profile!.id) {
-            alertas.push({
-              destinatario_id: a.responsavel_atividade_id,
-              tipo: 'nomeacao_responsavel_atividade',
-              entidade: 'atividade', entidade_id: ativ.id, entidade_nome: a.nome.trim(),
-              projeto_id: proj.id, projeto_nome: proj.nome,
-              autor_id: profile!.id, autor_nome: profile!.nome,
-              descricao: `Nomeação como responsável pela atividade ${a.nome.trim()}`
-            })
-          }
-
-          // Collect alerts for atividade participants
-          const validAtivParticipantes = a.participantes.filter(p => p.papel.trim())
-          for (const ap of validAtivParticipantes) {
-            if (ap.tipo_participante === 'usuario' && ap.user_id && ap.user_id !== profile!.id) {
-              alertas.push({
-                destinatario_id: ap.user_id,
-                tipo: 'nomeacao_participante',
-                entidade: 'atividade', entidade_id: ativ.id, entidade_nome: a.nome.trim(),
-                projeto_id: proj.id, projeto_nome: proj.nome,
-                autor_id: profile!.id, autor_nome: profile!.nome,
-                descricao: `Inserção como participante da atividade ${a.nome.trim()}`
-              })
-            }
-          }
-        }
-
-        // Collect alert for entrega responsavel
-        if (e.responsavel_entrega_id && e.responsavel_entrega_id !== profile!.id) {
-          alertas.push({
-            destinatario_id: e.responsavel_entrega_id,
-            tipo: 'nomeacao_responsavel_entrega',
-            entidade: 'entrega', entidade_id: ent.id, entidade_nome: e.nome.trim(),
-            projeto_id: proj.id, projeto_nome: proj.nome,
-            autor_id: profile!.id, autor_nome: profile!.nome,
-            descricao: `Nomeação como responsável da entrega ${e.nome.trim()}`
-          })
-        }
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || 'Erro ao salvar projeto.')
       }
-
-      // Alert for project leader
-      if (responsavelId && responsavelId !== profile!.id) {
-        alertas.push({
-          destinatario_id: responsavelId,
-          tipo: 'nomeacao_lider',
-          entidade: 'projeto', entidade_id: proj.id, entidade_nome: proj.nome,
-          projeto_id: proj.id, projeto_nome: proj.nome,
-          autor_id: profile!.id, autor_nome: profile!.nome,
-          descricao: `Nomeação como líder do projeto ${proj.nome}`
-        })
-      }
-
-      // Batch insert all alerts
-      if (alertas.length > 0) {
-        await supabase.from('alertas').insert(alertas)
-        // Send push notifications (best-effort, non-blocking)
-        sendPushForAlerts(alertas)
-      }
-
-      router.push(`/dashboard/projetos/${proj.id}`)
+      const result = await res.json()
+      router.push(`/dashboard/projetos/${result.id}`)
     } catch (err: any) {
       alert(`Erro ao salvar: ${err.message}`)
     } finally {

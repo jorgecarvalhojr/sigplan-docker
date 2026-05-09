@@ -1,150 +1,83 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Shield, Eye, EyeOff, Check, X, Mail } from 'lucide-react'
-import { PASSWORD_RULES, validatePassword } from '@/lib/password-validation'
+import { Shield, Eye, EyeOff, Lock, User, Building2, Calculator } from 'lucide-react'
+import { useEffect } from 'react'
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('')
+  const [rg, setRg] = useState('')
   const [password, setPassword] = useState('')
-  const [nome, setNome] = useState('')
-  const [setorId, setSetorId] = useState('')
-  const [setores, setSetores] = useState<{ id: number; codigo: string; nome_completo: string }[]>([])
-  const [isSignUp, setIsSignUp] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
-  const [emailAtivo, setEmailAtivo] = useState(false)
-  const [perfilSolicitado, setPerfilSolicitado] = useState('usuario')
-  const [showForgot, setShowForgot] = useState(false)
-  const [forgotEmail, setForgotEmail] = useState('')
-  const [forgotLoading, setForgotLoading] = useState(false)
-  const [forgotMessage, setForgotMessage] = useState('')
+  
+  const [profiles, setProfiles] = useState<any[]>([])
+  const [selectedProfileId, setSelectedProfileId] = useState<string>('')
+  
+  // Anti-bot states
+  const [challenge, setChallenge] = useState<{ question: string, token: string } | null>(null)
+  const [challengeAnswer, setChallengeAnswer] = useState('')
+  const [honeypot, setHoneypot] = useState('')
+
   const router = useRouter()
-  const supabase = createClient()
+
+  const fetchChallenge = async () => {
+    try {
+      const res = await fetch('/api/auth/challenge')
+      const data = await res.json()
+      setChallenge({ question: data.question, token: data.challengeToken })
+    } catch (err) {
+      console.error('Erro ao carregar desafio anti-bot')
+    }
+  }
 
   useEffect(() => {
-    supabase.from('setores').select('id, codigo, nome_completo').eq('visivel_cadastro', true).order('codigo')
-      .then(({ data }) => { if (data) setSetores(data) })
-    // Carregar config de email
-    supabase.from('configuracoes').select('valor').eq('chave', 'email_funcoes_ativas').single()
-      .then(({ data }) => { if (data) setEmailAtivo(data.valor === 'true') })
+    fetchChallenge()
   }, [])
-
-  const passwordCheck = validatePassword(password)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setLoading(true)
     setError('')
-    setMessage('')
 
-    if (isSignUp) {
-      if (!setorId) {
-        setError('Selecione seu setor de lotação.')
-        setLoading(false)
-        return
-      }
-
-      // Validar senha forte no cadastro
-      if (!passwordCheck.valid) {
-        setError('A senha não atende aos requisitos de segurança.')
-        setLoading(false)
-        return
-      }
-
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { nome, setor_id: parseInt(setorId), perfil_solicitado: perfilSolicitado } }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          rg, 
+          password, 
+          selectedProfileId: selectedProfileId || undefined,
+          challengeAnswer,
+          challengeToken: challenge?.token,
+          website: honeypot // Honeypot field
+        }),
       })
-      if (signUpError) {
-        setError(signUpError.message)
-      } else if (signUpData.user && !emailAtivo) {
-        // Email desativado — auto-confirmar via API
-        await fetch('/api/auth/auto-confirm', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: signUpData.user.id }),
-        })
-        if (signUpData.session) {
-          router.push('/pendente')
-          router.refresh()
-        } else {
-          // Fallback: se não tiver session, tentar login
-          const { error: loginErr } = await supabase.auth.signInWithPassword({ email, password })
-          if (!loginErr) {
-            router.push('/pendente')
-            router.refresh()
-          } else {
-            setMessage('Conta criada! Aguardando aprovação do administrador.')
-          }
-        }
-      } else if (signUpData.session) {
-        router.push('/pendente')
-        router.refresh()
-      } else {
-        // Confirmação de email habilitada — aguardar verificação
-        setMessage('Conta criada com sucesso! Verifique seu email para confirmar o cadastro.')
-      }
-    } else {
-      // Login normal
-      if (!password) {
-        // Senha vazia — tentar login com senha zerada
-        try {
-          const res = await fetch('/api/auth/login-reset', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email }),
-          })
-          if (res.ok) {
-            const { reset_token } = await res.json()
-            // Fazer signIn no client (browser client usa publishable key, funciona com GoTrue)
-            const { error: signInError } = await supabase.auth.signInWithPassword({
-              email,
-              password: reset_token,
-            })
-            if (signInError) {
-              setError('Email ou senha incorretos.')
-            } else {
-              router.push('/dashboard/perfil?forcarSenha=true')
-              router.refresh()
-            }
-          } else {
-            setError('Email ou senha incorretos.')
-          }
-        } catch {
-          setError('Email ou senha incorretos.')
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password })
-        if (error) {
-          setError('Email ou senha incorretos.')
-        } else {
-          router.push('/dashboard')
-          router.refresh()
-        }
-      }
-    }
-    setLoading(false)
-  }
 
-  async function handleForgotPassword() {
-    if (!forgotEmail) return
-    setForgotLoading(true)
-    setForgotMessage('')
-    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
-      redirectTo: `${window.location.origin}/dashboard/perfil`,
-    })
-    if (error) {
-      setForgotMessage('Erro ao enviar email. Tente novamente.')
-    } else {
-      setForgotMessage('Email enviado! Verifique sua caixa de entrada.')
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error || 'Erro ao realizar login')
+      } else if (data.requiresRegistration) {
+        // Redireciona para a página de registro com os dados pré-preenchidos
+        const params = new URLSearchParams({
+          rg: data.rg,
+          nome: data.nome
+        })
+        router.push(`/registro?${params.toString()}`)
+      } else if (data.requiresProfileSelection) {
+        setProfiles(data.profiles)
+      } else {
+        router.push('/dashboard')
+        router.refresh()
+      }
+    } catch (err) {
+      setError('Erro de conexão com o servidor')
+      fetchChallenge() // Gera novo desafio em caso de erro
+    } finally {
+      setLoading(false)
     }
-    setForgotLoading(false)
   }
 
   return (
@@ -163,188 +96,150 @@ export default function LoginPage() {
           <p className="text-gray-400 mt-1 text-sm">SEDEC/RJ • Plano Estratégico 2024–2035</p>
         </div>
 
-        {showForgot ? (
-          <div className="bg-white rounded-2xl shadow-xl p-8 space-y-5">
-            <h2 className="text-lg font-semibold text-gray-800 text-center">Recuperar senha</h2>
-            <p className="text-sm text-gray-500 text-center">
-              Informe seu email e enviaremos um link para redefinir sua senha.
+        <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl p-8 space-y-6">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-gray-800">Login CBMERJ</h2>
+            <p className="text-sm text-gray-500 mt-2">
+              {profiles.length > 0 ? 'Selecione por qual órgão deseja acessar' : 'Use seu RG e senha da rede CBMERJ'}
             </p>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input
-                type="email"
-                value={forgotEmail}
-                onChange={e => setForgotEmail(e.target.value)}
-                className="input-field"
-                placeholder="seu.email@defesacivil.rj.gov.br"
-              />
-            </div>
-            {forgotMessage && (
-              <div className={`text-sm px-4 py-3 rounded-lg ${
-                forgotMessage.includes('Erro') ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700'
-              }`}>{forgotMessage}</div>
-            )}
-            <button onClick={handleForgotPassword} disabled={forgotLoading || !forgotEmail}
-              className="btn-primary w-full disabled:opacity-50">
-              {forgotLoading ? 'Enviando...' : 'Enviar link de recuperação'}
-            </button>
-            <div className="text-center">
-              <button type="button" onClick={() => { setShowForgot(false); setForgotMessage('') }}
-                className="text-sm text-sedec-500 hover:text-sedec-700">
-                Voltar ao login
-              </button>
-            </div>
           </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl p-8 space-y-5">
-            <h2 className="text-lg font-semibold text-gray-800 text-center">
-              {isSignUp ? 'Criar conta' : 'Entrar no sistema'}
-            </h2>
 
-            {isSignUp && (
+          <div className="space-y-4">
+            {profiles.length === 0 ? (
               <>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Posto e Nome de Guerra</label>
-                  <input
-                    type="text"
-                    value={nome}
-                    onChange={e => setNome(e.target.value)}
-                    className="input-field"
-                    required
-                    placeholder="ex: Maj BM Fulano"
-                  />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">RG</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                      <User size={18} />
+                    </div>
+                    <input
+                      type="text"
+                      value={rg}
+                      onChange={e => setRg(e.target.value)}
+                      className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-orange-500 focus:border-orange-500 bg-gray-50"
+                      required
+                      placeholder="0000000"
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Setor de lotação <span className="text-red-500">*</span>
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Senha</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                      <Lock size={18} />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      className="block w-full pl-10 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-orange-500 focus:border-orange-500 bg-gray-50"
+                      required
+                      placeholder="••••••••"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Perfil (Órgão)</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                    <Building2 size={18} />
+                  </div>
                   <select
-                    value={setorId}
-                    onChange={e => setSetorId(e.target.value)}
-                    className="input-field"
+                    value={selectedProfileId}
+                    onChange={e => setSelectedProfileId(e.target.value)}
+                    className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-orange-500 focus:border-orange-500 bg-gray-50"
                     required
                   >
-                    <option value="">Selecione seu setor...</option>
-                    {setores.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.codigo} — {s.nome_completo}
+                    <option value="" disabled>Selecione um órgão...</option>
+                    {profiles.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.setor_codigo} - {p.setor_nome || p.email}
                       </option>
                     ))}
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">
-                    Seu setor determina as permissões de edição de projetos.
-                  </p>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Perfil desejado <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={perfilSolicitado}
-                    onChange={e => setPerfilSolicitado(e.target.value)}
-                    className="input-field"
-                    required
-                  >
-                    <option value="usuario">Usuário (somente leitura)</option>
-                    <option value="gestor">Gestor (pode criar/editar projetos)</option>
-                  </select>
-                  <p className="text-xs text-gray-400 mt-1">
-                    O administrador definirá seu perfil final ao aprovar o cadastro.
-                  </p>
-                </div>
-              </>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                className="input-field"
-                required
-                placeholder="seu.email@defesacivil.rj.gov.br"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Senha</label>
-              <div className="relative">
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  className="input-field pr-10"
-                  {...(isSignUp ? { required: true, minLength: 8 } : {})}
-                  placeholder={isSignUp ? 'Crie uma senha forte' : '••••••'}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
               </div>
+            )}
+          </div>
 
-              {/* Indicador de requisitos no cadastro */}
-              {isSignUp && password.length > 0 && (
-                <div className="mt-2 space-y-1">
-                  {PASSWORD_RULES.map((rule, i) => {
-                    const pass = rule.test(password)
-                    return (
-                      <div key={i} className={`flex items-center gap-1.5 text-xs ${pass ? 'text-green-600' : 'text-gray-400'}`}>
-                        {pass ? <Check size={12} /> : <X size={12} />}
-                        {rule.label}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+          {/* Honeypot field - hidden from users */}
+          <div className="hidden" aria-hidden="true">
+            <input 
+              type="text" 
+              name="website" 
+              value={honeypot} 
+              onChange={e => setHoneypot(e.target.value)} 
+              tabIndex={-1} 
+              autoComplete="off" 
+            />
+          </div>
 
-              {/* Dica de senha zerada (só no login, não no cadastro) */}
-              {!isSignUp && (
-                <p className="text-xs text-gray-400 mt-1">
-                  Se sua senha foi zerada pelo administrador, deixe este campo vazio.
-                </p>
-              )}
+          {profiles.length === 0 && challenge && (
+            <div className="space-y-2 p-4 bg-orange-50 rounded-xl border border-orange-100">
+              <label className="flex items-center gap-2 text-sm font-medium text-orange-800">
+                <Calculator size={16} />
+                Desafio Anti-Robô
+              </label>
+              <div className="flex items-center gap-3">
+                <span className="text-gray-700 font-bold whitespace-nowrap">{challenge.question}</span>
+                <input
+                  type="number"
+                  value={challengeAnswer}
+                  onChange={e => setChallengeAnswer(e.target.value)}
+                  className="block w-20 px-3 py-1.5 border border-orange-200 rounded-lg focus:ring-orange-500 focus:border-orange-500 bg-white"
+                  required
+                  placeholder="?"
+                />
+              </div>
             </div>
+          )}
 
-            {error && (
-              <div className="bg-red-50 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>
-            )}
-            {message && (
-              <div className="bg-green-50 text-green-700 text-sm px-4 py-3 rounded-lg">{message}</div>
-            )}
+          {error && (
+            <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded flex items-start gap-3">
+              <div className="mt-0.5"><Shield size={16} /></div>
+              <p className="text-sm">{error}</p>
+            </div>
+          )}
 
-            <button type="submit" disabled={loading} className="btn-primary w-full">
-              {loading ? 'Aguarde...' : isSignUp ? 'Criar conta' : 'Entrar'}
+          <button
+            type="submit"
+            disabled={loading || (profiles.length === 0 && !challengeAnswer) || (profiles.length > 0 && !selectedProfileId)}
+            className="w-full py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-bold text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-50 transition-colors"
+          >
+            {loading ? 'Autenticando...' : profiles.length > 0 ? 'ACESSAR SISTEMA' : 'ENTRAR'}
+          </button>
+
+          {profiles.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setProfiles([])
+                setSelectedProfileId('')
+                setPassword('')
+              }}
+              className="w-full text-sm text-gray-500 hover:text-gray-700"
+            >
+              Voltar
             </button>
+          )}
 
-            <div className="text-center space-y-2">
-              <button
-                type="button"
-                onClick={() => { setIsSignUp(!isSignUp); setError(''); setMessage('') }}
-                className="text-sm text-sedec-500 hover:text-sedec-700 block mx-auto"
-              >
-                {isSignUp ? 'Já tem conta? Entrar' : 'Não tem conta? Criar'}
-              </button>
-
-              {/* Link "Esqueceu a senha?" — só quando email ativado e no modo login */}
-              {!isSignUp && emailAtivo && (
-                <button
-                  type="button"
-                  onClick={() => { setShowForgot(true); setForgotEmail(email) }}
-                  className="text-xs text-gray-400 hover:text-sedec-500 block mx-auto"
-                >
-                  Esqueceu a senha?
-                </button>
-              )}
-            </div>
-          </form>
-        )}
+          <div className="pt-4 border-t border-gray-100">
+            <p className="text-center text-xs text-gray-400">
+              Acesso restrito a militares e servidores autorizados pela SEDEC-RJ.
+            </p>
+          </div>
+        </form>
       </div>
     </div>
   )

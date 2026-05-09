@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus, Filter, X, Search, FolderKanban, Clock, AlertTriangle, CheckCircle, CheckCircle2, XCircle, ChevronRight, Building2, Activity, ClipboardList, ChevronDown, ChevronUp, AlertCircle, Crown, Package, Wrench, Users, HelpCircle, Info, Pause, MessageSquare } from 'lucide-react'
 import type { Profile } from '@/lib/types'
@@ -83,77 +82,52 @@ export default function ProjetosPage() {
   const [eligibleUsers, setEligibleUsers] = useState<{ id: string; nome: string; setor_id: number | null; setor_codigo: string | null }[]>([])
 
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
     setLoading(true)
 
-    // Profile
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      const { data: p } = await supabase.from('profiles').select('*, setores:setor_id(codigo)').eq('id', user.id).single()
-      if (p) {
-        setProfile(p as any)
-        // Visualização sem limitação de filtro — todos começam sem filtro de setor
-      }
+    const sessionRes = await fetch('/api/auth/session')
+    if (!sessionRes.ok) { router.push('/login'); setLoading(false); return }
+    const session = await sessionRes.json()
+    const user = session.user
+    if (!user) { router.push('/login'); setLoading(false); return }
+    
+    // Set profile immediately from session as a fallback
+    setProfile(user as any)
+
+    // Dados via PostgreSQL Docker
+    const res = await fetch('/api/dados/projetos')
+    if (!res.ok) { setLoading(false); return }
+    const data = await res.json()
+
+    // If API returned a profile (though it shouldn't in current route), use it
+    if (data.profile) setProfile(data.profile as any)
+    if (data.objetivos) setOes(data.objetivos)
+    if (data.acoes) setAcoes(data.acoes.map((a: any) => ({
+      numero: a.numero, nome: a.nome, oe_codigo: a.oe_codigo || '',
+    })))
+    if (data.setores) setSetores(data.setores)
+    if (data.projetos?.[0] !== undefined) {
+      // usuarios com a interface esperada pelo componente
     }
 
-    // Configs
-    const { data: cfgs } = await supabase.from('configuracoes').select('chave, valor')
-    if (cfgs) {
-      const m: Record<string, string> = {}
-      cfgs.forEach((c: any) => { m[c.chave] = c.valor })
-      setConfigs(m)
+    // Configs e Profile do contexto
+    const ctxRes = await fetch('/api/dados/contexto')
+    if (ctxRes.ok) {
+      const ctx = await ctxRes.json()
+      if (ctx.profile) setProfile(ctx.profile)
+      if (ctx.configuracoes) setConfigs(ctx.configuracoes)
+      if (ctx.usuarios) setEligibleUsers(ctx.usuarios.map((u: any) => ({
+        id: u.id, nome: u.nome, setor_id: u.setor_id, setor_codigo: u.setor_codigo ?? null,
+      })))
     }
 
-    // Reference data
-    const { data: oesData } = await supabase.from('objetivos_estrategicos').select('codigo, nome').order('codigo')
-    if (oesData) setOes(oesData)
+    const setoresData = data.setores || []
 
-    const { data: acoesData } = await supabase.from('acoes_estrategicas')
-      .select('numero, nome, objetivo_estrategico:objetivo_estrategico_id(codigo)')
-      .order('numero')
-    if (acoesData) setAcoes(acoesData.map((a: any) => ({
-      numero: a.numero, nome: a.nome, oe_codigo: a.objetivo_estrategico?.codigo || ''
-    })))
-
-    const { data: setoresData } = await supabase.from('setores').select('id, codigo, nome_completo').order('codigo')
-    if (setoresData) setSetores(setoresData)
-
-    // Load eligible users for responsavel filter
-    const { data: usersData } = await supabase.from('profiles')
-      .select('id, nome, setor_id, setores:setor_id(codigo)')
-      .not('role', 'eq', 'solicitante')
-      .eq('ativo', true)
-      .order('nome')
-    if (usersData) setEligibleUsers(usersData.map((u: any) => ({
-      id: u.id, nome: u.nome,
-      setor_id: u.setor_id, setor_codigo: u.setores?.codigo || null
-    })))
-
-    // Projects with all related data
-    const { data: projData } = await supabase.from('projetos')
-      .select(`id, codigo_sequencial, nome, descricao, setor_lider_id, tipo_acao, responsavel_id, status,
-        setor_lider:setor_lider_id(codigo, nome_completo),
-        projeto_acoes(acao_estrategica:acao_estrategica_id(numero, nome, objetivo_estrategico:objetivo_estrategico_id(codigo))),
-        entregas(id, nome, data_final_prevista, status, responsavel_entrega_id, orgao_responsavel_setor_id,
-          entrega_participantes(setor_id, tipo_participante, setor:setor_id(codigo)),
-          atividades(id, nome, data_prevista, status, responsavel_atividade_id,
-            atividade_participantes(setor_id, user_id, tipo_participante, setor:setor_id(codigo)))
-        )`)
-      .order('nome')
-
-    // Solicitações pendentes por projeto
-    const { data: solsData } = await supabase.from('solicitacoes_alteracao')
-      .select('projeto_id').eq('status', 'em_analise')
-    const solsPorProjeto: Record<number, number> = {}
-    solsData?.forEach((s: any) => { solsPorProjeto[s.projeto_id] = (solsPorProjeto[s.projeto_id] || 0) + 1 })
-
-    if (projData) {
-      const cards: ProjetoCard[] = projData.map((p: any) => {
-        // Collect responsaveis
+    if (data.projetos) {
+      const cards: ProjetoCard[] = data.projetos.map((p: any) => {
         const respEntregaSet = new Set<string>()
         const respAtividadeSet = new Set<string>()
         p.entregas?.forEach((e: any) => {
@@ -314,7 +288,7 @@ export default function ProjetosPage() {
           tem_atividades_atrasadas: ativAtrasadas.length > 0,
           status: p.status || 'ativo',
           status_projeto,
-          solicitacoes_pendentes: solsPorProjeto[p.id] || 0,
+          solicitacoes_pendentes: p.solicitacoes_pendentes || 0,
           responsavel_id: p.responsavel_id || null,
           responsaveis_entrega: Array.from(respEntregaSet),
           responsaveis_atividade: Array.from(respAtividadeSet),
@@ -329,54 +303,10 @@ export default function ProjetosPage() {
         }
       })
 
-      // Load unread message counts per project
-      try {
-        if (user) {
-          const { data: meuPerfil } = await supabase.from('profiles').select('id, role, setor_id').eq('id', user.id).single()
-          if (meuPerfil) {
-            const isAdmMst = meuPerfil.role === 'admin' || meuPerfil.role === 'master'
-
-            // Buscar todas as mensagens
-            const { data: allMsgs } = await supabase
-              .from('mensagens_projeto')
-              .select('id, projeto_id, autor_id')
-
-            if (allMsgs && allMsgs.length > 0) {
-              // Buscar leituras do usuário atual
-              const { data: myReads } = await supabase
-                .from('mensagem_leituras')
-                .select('mensagem_id')
-                .eq('usuario_id', meuPerfil.id)
-              const readSet = new Set((myReads || []).map((r: any) => r.mensagem_id))
-
-              // Buscar destinatários relevantes ao setor do usuário (para não-admin)
-              let myDestMsgIds: Set<number> | null = null
-              if (!isAdmMst && meuPerfil.setor_id) {
-                const { data: myDests } = await supabase
-                  .from('mensagem_destinatarios')
-                  .select('mensagem_id')
-                  .eq('setor_id', meuPerfil.setor_id)
-                myDestMsgIds = new Set((myDests || []).map((d: any) => d.mensagem_id))
-              }
-
-              const unreadByProject: Record<number, number> = {}
-              allMsgs.forEach((m: any) => {
-                // Ignorar próprias mensagens
-                if (m.autor_id === meuPerfil.id) return
-                // Já lida? Ignorar
-                if (readSet.has(m.id)) return
-                // Se não é admin/master, checar se é destinatário
-                if (!isAdmMst && myDestMsgIds && !myDestMsgIds.has(m.id)) return
-                // Contar
-                unreadByProject[m.projeto_id] = (unreadByProject[m.projeto_id] || 0) + 1
-              })
-              cards.forEach(c => { c.unread_messages = unreadByProject[c.id] || 0 })
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Erro ao carregar mensagens não lidas:', e)
-      }
+      // Mensagens não lidas (vem do servidor na resposta)
+      data.projetos.forEach((p: any, i: number) => {
+        if (cards[i]) cards[i].unread_messages = p.unread_messages || 0
+      })
 
       setProjetos(cards)
     }
@@ -514,7 +444,11 @@ export default function ProjetosPage() {
   const [showPaineis, setShowPaineis] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
   const hasFilters = !!(searchText || oeFilter || acaoFilter || setorFilter || tipoAcaoFilter || responsavelFilter)
-  const canCreate = profile?.role === 'admin' || profile?.role === 'master' || (profile?.role === 'gestor' && configs['proj_permitir_cadastro'] !== 'false')
+  const canCreate = (
+    profile?.role?.toLowerCase() === 'admin' || 
+    profile?.role?.toLowerCase() === 'master' || 
+    (profile?.role?.toLowerCase() === 'gestor' && String(configs['proj_permitir_cadastro']).trim().toLowerCase() !== 'false')
+  )
 
   function formatQuinzena(dateStr: string | null) {
     if (!dateStr) return '—'
@@ -540,7 +474,12 @@ export default function ProjetosPage() {
             <FolderKanban size={24} className="text-orange-500" /> Gestão de Projetos
             <button onClick={() => setHelpType('permissoes')} className="text-gray-400 hover:text-sedec-500" title="Regras de permissão"><HelpCircle size={18} /></button>
           </h1>
-          <p className="text-gray-500 text-sm mt-1">Projetos vinculados às Ações Estratégicas Prioritárias</p>
+          <p className="text-gray-500 text-sm mt-1">
+            Projetos vinculados às Ações Estratégicas Prioritárias
+            <span className="opacity-0 hover:opacity-100 text-[8px] ml-2 text-gray-300">
+              Role: {profile?.role || 'null'} | Permitir: {String(configs['proj_permitir_cadastro'])}
+            </span>
+          </p>
         </div>
         {canCreate && (
           <button onClick={() => router.push('/dashboard/projetos/novo')}

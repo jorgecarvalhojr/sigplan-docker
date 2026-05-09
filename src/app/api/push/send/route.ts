@@ -1,14 +1,12 @@
+export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
+import { getSession } from '@/lib/session'
 import { sendPushToUser, sendPushToUsers } from '@/lib/push-server'
 
 export async function POST(req: NextRequest) {
   try {
-    const supabase = createServerSupabase()
-
-    // Verificar autenticação
-    const { data: { user }, error: authErr } = await supabase.auth.getUser()
-    if (authErr || !user) {
+    const session = await getSession()
+    if (!session?.user) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
 
@@ -30,3 +28,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
   }
 }
+

@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { FileBarChart, Search, CheckSquare, Square, Loader2, Filter, Info, Pause, X } from 'lucide-react'
 import type { Profile } from '@/lib/types'
@@ -26,7 +25,6 @@ interface ProjetoItem {
 }
 
 export default function RelatoriosPage() {
-  const supabase = createClient()
   const router = useRouter()
 
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -64,120 +62,84 @@ export default function RelatoriosPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
+      // Auth via API local
+      const sessionRes = await fetch('/api/auth/session')
+      if (!sessionRes.ok) { router.push('/login'); return }
+      const session = await sessionRes.json()
+      const user = session.user
 
-      const { data } = await supabase
-        .from('profiles')
-        .select('*, setores(codigo)')
-        .eq('id', user.id)
-        .single()
+      // Dados via PostgreSQL Docker
+      const res = await fetch('/api/dados/relatorios')
+      if (res.status === 403) { router.push('/dashboard'); return }
+      if (!res.ok) { setLoading(false); return }
 
-      if (!data || (data.role !== 'admin' && data.role !== 'master')) {
-        router.push('/dashboard')
-        return
-      }
-      setProfile(data as Profile)
+      const data = await res.json()
 
-      // Load reference data for filters
-      const [oesRes, acoesRes, setoresRes, usersRes] = await Promise.all([
-        supabase.from('objetivos_estrategicos').select('codigo, nome').order('codigo'),
-        supabase.from('acoes_estrategicas')
-          .select('numero, nome, objetivo_estrategico:objetivo_estrategico_id(codigo)')
-          .order('numero'),
-        supabase.from('setores').select('id, codigo, nome_completo').order('codigo'),
-        supabase.from('profiles')
-          .select('id, nome, setor_id, setores:setor_id(codigo)')
-          .not('role', 'eq', 'solicitante')
-          .eq('ativo', true)
-          .order('nome'),
-      ])
-
-      if (oesRes.data) setOes(oesRes.data)
-      if (acoesRes.data) setAcoesRef(acoesRes.data.map((a: any) => ({
-        numero: a.numero, nome: a.nome, oe_codigo: a.objetivo_estrategico?.codigo || ''
+      setProfile(data.profile as Profile)
+      setOes(data.objetivos || [])
+      setAcoesRef((data.acoes || []).map((a: any) => ({
+        numero: a.numero, nome: a.nome, oe_codigo: a.oe_codigo || '',
       })))
-      if (setoresRes.data) setSetores(setoresRes.data)
-      if (usersRes.data) setEligibleUsers(usersRes.data.map((u: any) => ({
+      setSetores(data.setores || [])
+      setEligibleUsers((data.profiles || []).map((u: any) => ({
         id: u.id, nome: u.nome,
-        setor_id: u.setor_id, setor_codigo: u.setores?.codigo || null
+        setor_id: u.setor_id, setor_codigo: u.setores?.codigo || null,
       })))
 
-      // Load projects with data needed for filtering
-      const { data: projData } = await supabase.from('projetos')
-        .select(`id, nome, descricao, setor_lider_id, tipo_acao, responsavel_id, status,
-          setor_lider:setor_lider_id(codigo, nome_completo),
-          projeto_acoes(acao_estrategica:acao_estrategica_id(numero, nome, objetivo_estrategico:objetivo_estrategico_id(codigo))),
-          entregas(id, status, responsavel_entrega_id, orgao_responsavel_setor_id,
-            entrega_participantes(setor_id, tipo_participante, setor:setor_id(codigo)),
-            atividades(id, status, responsavel_atividade_id,
-              atividade_participantes(setor_id, user_id, tipo_participante, setor:setor_id(codigo)))
-          )`)
-        .order('nome')
+      const setoresData = data.setores || []
+      const cards: ProjetoItem[] = (data.projetos || []).map((p: any) => {
+        const respEntregaSet = new Set<string>()
+        const respAtividadeSet = new Set<string>()
+        const partAtividadeSet = new Set<string>()
+        const setorSet = new Set<string>()
 
-      if (projData && setoresRes.data) {
-        const cards: ProjetoItem[] = projData.map((p: any) => {
-          const respEntregaSet = new Set<string>()
-          const respAtividadeSet = new Set<string>()
-          const partAtividadeSet = new Set<string>()
-          const setorSet = new Set<string>()
-
-          p.entregas?.forEach((e: any) => {
-            if (e.responsavel_entrega_id) respEntregaSet.add(e.responsavel_entrega_id)
-            if (e.orgao_responsavel_setor_id) {
-              const setorResp = setoresRes.data!.find((st: any) => st.id === e.orgao_responsavel_setor_id)
-              if (setorResp) setorSet.add(setorResp.codigo)
-            }
-            e.entrega_participantes?.forEach((ep: any) => {
-              if (ep.tipo_participante === 'setor' && ep.setor) setorSet.add(ep.setor.codigo)
-              else if (ep.tipo_participante === 'externo_subsegop') setorSet.add('Ext. SUBSEGOP')
-              else if (ep.tipo_participante === 'externo_sedec') setorSet.add('Ext. SEDEC')
-            })
-            e.atividades?.forEach((a: any) => {
-              if (a.responsavel_atividade_id) respAtividadeSet.add(a.responsavel_atividade_id)
-              a.atividade_participantes?.forEach((ap: any) => {
-                if (ap.user_id) partAtividadeSet.add(ap.user_id)
-                if (ap.tipo_participante === 'setor' && ap.setor) setorSet.add(ap.setor.codigo)
-                else if (ap.tipo_participante === 'externo_subsegop') setorSet.add('Ext. SUBSEGOP')
-                else if (ap.tipo_participante === 'externo_sedec') setorSet.add('Ext. SEDEC')
-              })
+        p.entregas?.forEach((e: any) => {
+          if (e.responsavel_entrega_id) respEntregaSet.add(e.responsavel_entrega_id)
+          if (e.orgao_responsavel_setor_id) {
+            const setorResp = setoresData.find((st: any) => st.id === e.orgao_responsavel_setor_id)
+            if (setorResp) setorSet.add(setorResp.codigo)
+          }
+          e.entrega_participantes?.forEach((ep: any) => {
+            if (ep.tipo_participante === 'setor' && ep.setor_codigo) setorSet.add(ep.setor_codigo)
+            else if (ep.tipo_participante === 'externo_subsegop') setorSet.add('Ext. SUBSEGOP')
+            else if (ep.tipo_participante === 'externo_sedec') setorSet.add('Ext. SEDEC')
+          })
+          e.atividades?.forEach((a: any) => {
+            if (a.responsavel_atividade_id) respAtividadeSet.add(a.responsavel_atividade_id)
+            a.atividade_participantes?.forEach((ap: any) => {
+              if (ap.user_id) partAtividadeSet.add(ap.user_id)
+              if (ap.tipo_participante === 'setor' && ap.setor_codigo) setorSet.add(ap.setor_codigo)
+              else if (ap.tipo_participante === 'externo_subsegop') setorSet.add('Ext. SUBSEGOP')
+              else if (ap.tipo_participante === 'externo_sedec') setorSet.add('Ext. SEDEC')
             })
           })
-
-          // Derive status_projeto
-          const entregas = p.entregas || []
-          let status_projeto = 'em_andamento'
-          if (p.status === 'hibernando') {
-            status_projeto = 'hibernando'
-          } else if (entregas.length > 0) {
-            if (entregas.every((e: any) => e.status === 'cancelada')) status_projeto = 'cancelado'
-            else if (entregas.every((e: any) => e.status === 'resolvida' || e.status === 'cancelada') && entregas.some((e: any) => e.status === 'resolvida')) status_projeto = 'concluido'
-          }
-
-          return {
-            id: p.id,
-            nome: p.nome,
-            descricao: p.descricao,
-            setor_lider_codigo: p.setor_lider?.codigo || '',
-            setor_lider_nome: p.setor_lider?.nome_completo || '',
-            acoes: (p.projeto_acoes || []).map((pa: any) => ({
-              numero: pa.acao_estrategica?.numero || '',
-              nome: pa.acao_estrategica?.nome || '',
-              oe_codigo: pa.acao_estrategica?.objetivo_estrategico?.codigo || '',
-            })),
-            tipo_acao: p.tipo_acao || [],
-            setores_participantes: Array.from(setorSet),
-            responsavel_id: p.responsavel_id || null,
-            responsaveis_entrega: Array.from(respEntregaSet),
-            responsaveis_atividade: Array.from(respAtividadeSet),
-            participantes_atividade: Array.from(partAtividadeSet),
-            status: p.status || 'ativo',
-            status_projeto,
-          }
         })
-        setProjetos(cards)
-      }
 
+        const entregas = p.entregas || []
+        let status_projeto = 'em_andamento'
+        if (p.status === 'hibernando') {
+          status_projeto = 'hibernando'
+        } else if (entregas.length > 0) {
+          if (entregas.every((e: any) => e.status === 'cancelada')) status_projeto = 'cancelado'
+          else if (entregas.every((e: any) => e.status === 'resolvida' || e.status === 'cancelada') && entregas.some((e: any) => e.status === 'resolvida')) status_projeto = 'concluido'
+        }
+
+        return {
+          id: p.id, nome: p.nome, descricao: p.descricao,
+          setor_lider_codigo: p.setor_lider_codigo || '',
+          setor_lider_nome: p.setor_lider_nome || '',
+          acoes: (p.acoes || []),
+          tipo_acao: p.tipo_acao || [],
+          setores_participantes: Array.from(setorSet),
+          responsavel_id: p.responsavel_id || null,
+          responsaveis_entrega: Array.from(respEntregaSet),
+          responsaveis_atividade: Array.from(respAtividadeSet),
+          participantes_atividade: Array.from(partAtividadeSet),
+          status: p.status || 'ativo',
+          status_projeto,
+        }
+      })
+      setProjetos(cards)
       setLoading(false)
     }
     load()
@@ -292,8 +254,7 @@ export default function RelatoriosPage() {
     try {
       await generateReportPDF(
         Array.from(selectedIds),
-        { reportName: reportName.trim(), sections },
-        supabase
+        { reportName: reportName.trim(), sections }
       )
     } catch (err: any) {
       setError(err.message || 'Erro ao gerar relatório.')

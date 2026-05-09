@@ -1,5 +1,5 @@
 import webpush from 'web-push'
-import { createAdminClient } from './supabase-admin'
+import sql from './db'
 
 // Lazy VAPID configuration — only runs when first push is sent (avoids build-time errors)
 let vapidConfigured = false
@@ -30,14 +30,13 @@ interface PushPayload {
  */
 export async function sendPushToUser(userId: string, payload: PushPayload): Promise<{ sent: number; failed: number }> {
   ensureVapidConfigured()
-  const supabase = createAdminClient()
+  const subscriptions = await sql`
+    SELECT id, endpoint, p256dh, auth
+    FROM push_subscriptions
+    WHERE user_id = ${userId}
+  `
 
-  const { data: subscriptions, error } = await supabase
-    .from('push_subscriptions')
-    .select('id, endpoint, p256dh, auth')
-    .eq('user_id', userId)
-
-  if (error || !subscriptions || subscriptions.length === 0) {
+  if (!subscriptions || subscriptions.length === 0) {
     return { sent: 0, failed: 0 }
   }
 
@@ -70,7 +69,7 @@ export async function sendPushToUser(userId: string, payload: PushPayload): Prom
 
   // Limpar inscrições inválidas
   if (invalidIds.length > 0) {
-    await supabase.from('push_subscriptions').delete().in('id', invalidIds)
+    await sql`DELETE FROM push_subscriptions WHERE id IN ${sql(invalidIds)}`
     console.log(`[Push] Removidas ${invalidIds.length} inscrição(ões) inválida(s) do user ${userId}`)
   }
 

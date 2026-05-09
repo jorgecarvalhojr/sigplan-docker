@@ -1,22 +1,20 @@
+export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
-import { createAdminClient } from '@/lib/supabase-admin'
-import { deleteResultadoPDF } from '@/lib/resultados-storage'
+import { getSession } from '@/lib/session'
+import sql from '@/lib/db'
 
-// Remove um arquivo do bucket. Autorização: usuário autenticado não
-// 'solicitante'. A remoção dos metadados no banco é feita separadamente
-// pelo fluxo de save da entrega/atividade.
 export async function POST(request: NextRequest) {
   try {
-    const serverSupabase = createServerSupabase()
-    const { data: { user } } = await serverSupabase.auth.getUser()
-    if (!user) {
+    const session = await getSession()
+    if (!session?.user) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
+    const user = session.user
 
-    const admin = createAdminClient()
-    const { data: profile } = await admin
-      .from('profiles').select('role, ativo').eq('id', user.id).single()
+    // Verificar perfil via PostgreSQL Docker
+    const [profile] = await sql`
+      SELECT role, ativo FROM profiles WHERE id = ${user.id} LIMIT 1
+    `
     if (!profile || !profile.ativo || profile.role === 'solicitante') {
       return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
     }
@@ -27,6 +25,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'path inválido' }, { status: 400 })
     }
 
+    const { deleteResultadoPDF } = await import('@/lib/resultados-storage')
     await deleteResultadoPDF(path)
     return NextResponse.json({ success: true })
   } catch (err: any) {
@@ -38,3 +37,4 @@ export async function POST(request: NextRequest) {
 }
 
 export const runtime = 'nodejs'
+

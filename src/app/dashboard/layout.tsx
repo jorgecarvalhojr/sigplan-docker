@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter, usePathname } from 'next/navigation'
 import { LogOut, Settings, User, FileText, FolderKanban, CalendarDays, BarChart3, Bell, AlertCircle, ChevronDown, ChevronUp, X, BookOpen, MessageSquare, FileBarChart } from 'lucide-react'
 import ManualModal from '@/components/ManualModal'
@@ -11,165 +10,62 @@ import type { Profile } from '@/lib/types'
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
-  const [pendingSolicitacoes, setPendingSolicitacoes] = useState(0)
-  const [pendingSolicitantes, setPendingSolicitantes] = useState(0)
-  const [urgentActivities, setUrgentActivities] = useState(0)
-  const [urgentProjectIds, setUrgentProjectIds] = useState<number[]>([])
+  const [stats, setStats] = useState({
+    pendingSolicitacoes: 0,
+    pendingSolicitantes: 0,
+    urgentActivities: 0,
+    urgentProjectIds: [] as number[],
+    unreadMessages: 0
+  })
   const [alertas, setAlertas] = useState<any[]>([])
   const [alertasExpanded, setAlertasExpanded] = useState(false)
-  const [unreadMessages, setUnreadMessages] = useState(0)
   const [manualOpen, setManualOpen] = useState(false)
   const [manualTooltip, setManualTooltip] = useState(false)
+  
   const router = useRouter()
   const pathname = usePathname()
-  const supabase = createClient()
 
-  useEffect(() => {
-    async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
-
-      const { data } = await supabase
-        .from('profiles')
-        .select('*, setores:setor_id(codigo, nome_completo)')
-        .eq('id', user.id)
-        .single()
-
-      if (data) {
-        setProfile(data as any)
-
-        // Fetch urgent activities for this user
-        const now = new Date()
-        now.setHours(0,0,0,0)
-        const in7Days = new Date(now)
-        in7Days.setDate(in7Days.getDate() + 7)
-        const nowStr = now.toISOString().split('T')[0]
-        const limitStr = in7Days.toISOString().split('T')[0]
+  async function loadData() {
+    try {
+      const res = await fetch('/api/auth/layout-data')
+      if (res.status === 401) {
+        router.push('/login')
+        return
+      }
+      const data = await res.json()
+      if (data.profile) {
+        setProfile(data.profile)
+        setStats(data.stats)
+        setAlertas(data.alertas)
         
-        // Atividades com prazo próximo
-        const { data: urgentAtivData, count: urgentAtivCount } = await supabase.from('atividades')
-          .select('id, entregas!inner(projeto_id)', { count: 'exact' })
-          .eq('responsavel_atividade_id', data.id)
-          .neq('status', 'resolvida')
-          .neq('status', 'cancelada')
-          .gte('data_prevista', nowStr)
-          .lte('data_prevista', limitStr)
-
-        // Entregas com prazo próximo (responsável pela entrega — com ou sem atividades)
-        const { data: urgentEntregaData, count: urgentEntregaCount } = await supabase.from('entregas')
-          .select('id, projeto_id', { count: 'exact' })
-          .eq('responsavel_entrega_id', data.id)
-          .neq('status', 'resolvida')
-          .neq('status', 'cancelada')
-          .gte('data_final_prevista', nowStr)
-          .lte('data_final_prevista', limitStr)
-
-        const totalUrgent = (urgentAtivCount || 0) + (urgentEntregaCount || 0)
-        if (totalUrgent > 0) setUrgentActivities(totalUrgent)
-
-        const pIdsFromAtiv = (urgentAtivData || []).map((a: any) => a.entregas?.projeto_id).filter(Boolean)
-        const pIdsFromEntrega = (urgentEntregaData || []).map((e: any) => e.projeto_id).filter(Boolean)
-        const allPIds = Array.from(new Set([...pIdsFromAtiv, ...pIdsFromEntrega])) as number[]
-        if (allPIds.length > 0) setUrgentProjectIds(allPIds)
-
-        // Fetch alertas não lidos
-        const { data: alertasData } = await supabase.from('alertas')
-          .select('id, tipo, entidade, entidade_nome, projeto_id, projeto_nome, descricao, created_at')
-          .eq('destinatario_id', data.id)
-          .eq('lido', false)
-          .order('created_at', { ascending: false })
-        if (alertasData) setAlertas(alertasData)
-
-        // Fetch unread project messages for this user
-        try {
-          const isAdmMst = data.role === 'admin' || data.role === 'master'
-          let totalUnread = 0
-
-          if (isAdmMst) {
-            // Admin/Master: all messages not read by them
-            const { data: allMsgs } = await supabase
-              .from('mensagens_projeto')
-              .select('id')
-              .neq('autor_id', data.id)
-
-            if (allMsgs && allMsgs.length > 0) {
-              const { data: myReads } = await supabase
-                .from('mensagem_leituras')
-                .select('mensagem_id')
-                .eq('usuario_id', data.id)
-
-              const readSet = new Set((myReads || []).map((r: any) => r.mensagem_id))
-              totalUnread = allMsgs.filter(m => !readSet.has(m.id)).length
-            }
-          } else if (data.setor_id) {
-            // Other users: messages addressed to their sector, not read by them
-            const { data: myDests } = await supabase
-              .from('mensagem_destinatarios')
-              .select('mensagem_id, mensagens_projeto!inner(id, autor_id)')
-              .eq('setor_id', data.setor_id)
-
-            if (myDests && myDests.length > 0) {
-              const relevantMsgIds = myDests
-                .filter((d: any) => d.mensagens_projeto?.autor_id !== data.id)
-                .map((d: any) => d.mensagem_id)
-
-              if (relevantMsgIds.length > 0) {
-                const { data: myReads } = await supabase
-                  .from('mensagem_leituras')
-                  .select('mensagem_id')
-                  .eq('usuario_id', data.id)
-                  .in('mensagem_id', relevantMsgIds)
-
-                const readSet = new Set((myReads || []).map((r: any) => r.mensagem_id))
-                totalUnread = relevantMsgIds.filter((id: number) => !readSet.has(id)).length
-              }
-            }
-          }
-          setUnreadMessages(totalUnread)
-        } catch (e) {
-          // Silently fail if messaging tables don't exist yet
-        }
-
-        // Guarda: se solicitante, redirecionar para /pendente
-        if (data.role === 'solicitante') {
+        // Verificação de segurança: se ainda for solicitante, vai pra página pendente
+        if (data.profile.role === 'solicitante' && !pathname.includes('/pendente')) {
           router.push('/pendente')
-          return
-        }
-        // Guarda: se senha foi zerada, forçar troca de senha
-        if (data.senha_zerada && !window.location.pathname.includes('/dashboard/perfil')) {
-          router.push('/dashboard/perfil?forcarSenha=true')
         }
       }
+    } catch (err) {
+      console.error('Erro ao carregar dados do dashboard:', err)
+    } finally {
       setLoading(false)
     }
-    load()
-  }, [])
+  }
 
-  // Atualizar contagem de solicitações pendentes ao mudar de página ou voltar ao foco
   useEffect(() => {
-    if (!profile || (profile.role !== 'admin' && profile.role !== 'master')) return
-    async function refreshCount() {
-      const [solRes, solicitantesRes] = await Promise.all([
-        supabase.from('solicitacoes_alteracao')
-          .select('*', { count: 'exact', head: true }).eq('status', 'em_analise'),
-        supabase.from('profiles')
-          .select('*', { count: 'exact', head: true }).eq('role', 'solicitante'),
-      ])
-      setPendingSolicitacoes(solRes.count || 0)
-      setPendingSolicitantes(solicitantesRes.count || 0)
-    }
-    refreshCount()
-    const onFocus = () => refreshCount()
-    const onSolicitacaoUpdate = () => refreshCount()
+    loadData()
+    
+    // Refresh periódico ou em foco
+    const onFocus = () => loadData()
+    const onSolicitacaoUpdate = () => loadData()
     window.addEventListener('focus', onFocus)
     window.addEventListener('solicitacao-updated', onSolicitacaoUpdate)
+    
     return () => {
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('solicitacao-updated', onSolicitacaoUpdate)
     }
-  }, [profile, pathname])
+  }, [pathname])
 
-  // Mostrar tooltip do manual apenas na primeira visita
+  // Tooltip do manual
   useEffect(() => {
     if (!profile) return
     const key = `manual_tooltip_dismissed_${profile.id}`
@@ -186,9 +82,28 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   async function handleLogout() {
-    await supabase.auth.signOut()
+    await fetch('/api/auth/logout', { method: 'POST' })
     router.push('/login')
     router.refresh()
+  }
+
+  async function markAllAlertsRead() {
+    try {
+      await fetch('/api/auth/alertas/read-all', { method: 'POST' })
+      setAlertas([])
+      setAlertasExpanded(false)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  async function markAlertRead(id: number) {
+    try {
+      await fetch(`/api/auth/alertas/${id}/read`, { method: 'POST' })
+      setAlertas(prev => prev.filter(a => a.id !== id))
+    } catch (err) {
+      console.error(err)
+    }
   }
 
   if (loading) {
@@ -201,11 +116,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Top bar - preto com laranja (identidade SEDEC) */}
       <header className="bg-gray-900 text-white shadow-lg sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16 gap-2">
-            {/* Logo + SIGPLAN */}
             <button onClick={() => router.push('/dashboard')} className="flex items-center gap-3 shrink-0 hover:opacity-90">
               <img src="/logo-sedec.png" alt="SEDEC-RJ" className="h-10" />
               <div className="hidden lg:block border-l border-gray-600 pl-3">
@@ -216,7 +129,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </div>
             </button>
 
-            {/* Nav links */}
             <nav className="hidden md:flex items-center gap-0.5 ml-4 shrink-0">
               <button onClick={() => router.push('/dashboard')}
                 className="flex items-center gap-1 px-2 lg:px-3 py-1.5 rounded-md text-xs lg:text-sm text-gray-300 hover:text-white hover:bg-white/10 transition-colors">
@@ -242,25 +154,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               )}
             </nav>
 
-            {/* Right side controls */}
             <div className="flex items-center gap-2 lg:gap-3 ml-auto">
-              {/* Admin badges - compact */}
               {(profile?.role === 'admin' || profile?.role === 'master') && (
                 <div className="flex items-center gap-2">
-                  {pendingSolicitantes > 0 && (
+                  {stats.pendingSolicitantes > 0 && (
                     <button onClick={() => router.push('/admin?tab=usuarios')}
-                      className="flex items-center gap-1 text-yellow-400 hover:text-yellow-300 text-xs transition-colors" title={`${pendingSolicitantes} cadastro(s) pendente(s)`}>
+                      className="flex items-center gap-1 text-yellow-400 hover:text-yellow-300 text-xs transition-colors" title={`${stats.pendingSolicitantes} cadastro(s) pendente(s)`}>
                       <User size={14} />
-                      <span className="hidden xl:inline">{pendingSolicitantes} cadastro(s)</span>
-                      <span className="xl:hidden bg-yellow-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{pendingSolicitantes}</span>
+                      <span className="hidden xl:inline">{stats.pendingSolicitantes} cadastro(s)</span>
+                      <span className="xl:hidden bg-yellow-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{stats.pendingSolicitantes}</span>
                     </button>
                   )}
-                  {pendingSolicitacoes > 0 && (
+                  {stats.pendingSolicitacoes > 0 && (
                     <button onClick={() => router.push('/admin')}
-                      className="flex items-center gap-1 text-amber-400 hover:text-amber-300 text-xs transition-colors animate-pulse" title={`${pendingSolicitacoes} solicitação(ões)`}>
+                      className="flex items-center gap-1 text-amber-400 hover:text-amber-300 text-xs transition-colors animate-pulse" title={`${stats.pendingSolicitacoes} solicitação(ões)`}>
                       <Bell size={14} />
-                      <span className="hidden xl:inline">{pendingSolicitacoes} solic.</span>
-                      <span className="xl:hidden bg-amber-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{pendingSolicitacoes}</span>
+                      <span className="hidden xl:inline">{stats.pendingSolicitacoes} solic.</span>
+                      <span className="xl:hidden bg-amber-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{stats.pendingSolicitacoes}</span>
                     </button>
                   )}
                   <button
@@ -274,13 +184,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </div>
               )}
 
-              {unreadMessages > 0 && (
+              {stats.unreadMessages > 0 && (
                 <button onClick={() => router.push('/dashboard/projetos')}
                   className="flex items-center gap-1 text-blue-400 hover:text-blue-300 text-xs transition-colors"
-                  title={`${unreadMessages} mensagem(ns) não lida(s)`}>
+                  title={`${stats.unreadMessages} mensagem(ns) não lida(s)`}>
                   <MessageSquare size={14} />
-                  <span className="hidden xl:inline">{unreadMessages} msg</span>
-                  <span className="xl:hidden bg-blue-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{unreadMessages}</span>
+                  <span className="hidden xl:inline">{stats.unreadMessages} msg</span>
+                  <span className="xl:hidden bg-blue-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">{stats.unreadMessages}</span>
                 </button>
               )}
 
@@ -306,10 +216,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 >
                   <BookOpen size={17} />
                 </button>
-
                 {manualTooltip && (
                   <div className="absolute right-0 top-8 z-[200] w-56 animate-in fade-in slide-in-from-top-1 duration-200">
-                    {/* Seta */}
                     <div className="absolute -top-1.5 right-2 w-3 h-3 bg-sedec-600 rotate-45 rounded-sm" />
                     <div className="bg-sedec-600 text-white text-xs rounded-xl shadow-xl px-4 py-3 leading-relaxed">
                       <p className="font-semibold mb-1">📖 Manual disponível</p>
@@ -331,9 +239,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           </div>
         </div>
-        {/* Accent line */}
         <div className="h-0.5 bg-gradient-to-r from-orange-500 via-orange-400 to-yellow-500" />
-        {/* Mobile nav */}
         <div className="md:hidden flex overflow-x-auto border-t border-gray-700">
           <button onClick={() => router.push('/dashboard')}
             className="min-w-fit flex items-center justify-center gap-1.5 px-4 py-2 text-xs text-gray-400 hover:text-white hover:bg-white/5">
@@ -360,18 +266,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </header>
 
-      {urgentActivities > 0 && (
-        <div onClick={() => router.push(`/dashboard/projetos${urgentProjectIds.length > 0 ? `?alerta=${urgentProjectIds.join(',')}` : ''}`)}
+      {stats.urgentActivities > 0 && (
+        <div onClick={() => router.push(`/dashboard/projetos${stats.urgentProjectIds.length > 0 ? `?alerta=${stats.urgentProjectIds.join(',')}` : ''}`)}
           className="bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2.5 flex items-center justify-center gap-2 text-sm shadow-inner cursor-pointer transition-colors z-40 relative">
           <AlertCircle size={18} className="animate-pulse shrink-0" />
           <span className="font-medium text-center">
-            Atenção! Você é responsável por {urgentActivities} item(ns) com prazo para os próximos 7 dias.
+            Atenção! Você é responsável por {stats.urgentActivities} item(ns) com prazo para os próximos 7 dias.
           </span>
         </div>
       )}
 
       {alertas.length > 0 && (() => {
-        // Group alerts by projeto_id
         const grouped: Record<number, { projeto_nome: string; items: typeof alertas }> = {}
         for (const al of alertas) {
           const pid = al.projeto_id || 0
@@ -380,7 +285,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         }
         return (
           <div className="bg-orange-500 text-white z-40 relative">
-            {/* Header bar - always visible */}
             <div
               className="px-4 py-2.5 flex items-center justify-center gap-2 text-sm cursor-pointer hover:bg-orange-600 transition-colors"
               onClick={() => setAlertasExpanded(!alertasExpanded)}
@@ -393,9 +297,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <button
                 onClick={async (e) => {
                   e.stopPropagation()
-                  await supabase.from('alertas').update({ lido: true }).eq('destinatario_id', profile!.id).eq('lido', false)
-                  setAlertas([])
-                  setAlertasExpanded(false)
+                  await markAllAlertsRead()
                 }}
                 className="ml-2 text-white/80 hover:text-white text-xs underline"
                 title="Marcar todos como lidos"
@@ -403,7 +305,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 Limpar tudo
               </button>
             </div>
-            {/* Expandable section */}
             {alertasExpanded && (
               <div className="bg-orange-600/90 px-4 pb-3 max-h-64 overflow-y-auto">
                 {Object.entries(grouped).map(([pid, group]) => (
@@ -420,8 +321,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         <button
                           onClick={async (e) => {
                             e.stopPropagation()
-                            await supabase.from('alertas').update({ lido: true }).eq('id', al.id)
-                            setAlertas(prev => prev.filter(a => a.id !== al.id))
+                            await markAlertRead(al.id)
                           }}
                           className="text-orange-200 hover:text-white shrink-0 mt-0.5"
                           title="Dispensar"
@@ -442,7 +342,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {children}
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-gray-200 bg-white mt-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">

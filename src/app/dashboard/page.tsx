@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Search, Filter, X, ChevronRight, Target, Compass, Star, Users2 } from 'lucide-react'
 
@@ -39,7 +38,6 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
 
   // Inicializa filtros a partir da URL (restaura estado ao voltar)
   useEffect(() => {
@@ -66,76 +64,64 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function load() {
-      // Load ações with relations
-      const { data: acoesData } = await supabase
-        .from('acoes_estrategicas')
-        .select(`id, numero, nome,
-          eixo_prioritario:eixo_prioritario_id(codigo, nome),
-          objetivo_estrategico:objetivo_estrategico_id(codigo, nome),
-          estrategia:estrategia_id(codigo, nome)`)
-        .eq('visivel_enquadramento', true)
-
-      if (acoesData) {
-        const sorted = acoesData
-          .map((a: any) => ({
-            id: a.id,
-            numero: a.numero,
-            nome: a.nome,
-            eixo: a.eixo_prioritario?.nome || '',
-            oe: a.objetivo_estrategico?.nome || '',
-            estrategia: a.estrategia?.nome || '',
-          }))
-          .sort((a, b) => compareNumero(a.numero, b.numero))
-        setAcoes(sorted)
-      }
-
-      // Load filters data
-      const { data: setoresData } = await supabase.from('setores').select('codigo, nome_completo').order('codigo')
-      if (setoresData) setSetores(setoresData)
-
-      const { data: eixosData } = await supabase.from('eixos_prioritarios').select('codigo, nome').order('codigo')
-      if (eixosData) setEixos(eixosData)
-
-      const { data: oesData } = await supabase.from('objetivos_estrategicos').select('codigo, nome').order('codigo')
-      if (oesData) setOes(oesData)
-
-      // Load setor-acao mapping WITH tipo_participacao for grouping
-      const { data: fsData } = await supabase
-        .from('ficha_setores')
-        .select('setor_id, tipo_participacao, fichas!inner(acao_estrategica_id)')
-
-      if (fsData) {
-        const { data: setoresAll } = await supabase.from('setores').select('id, codigo')
-        const setorIdMap: Record<number, string> = {}
-        setoresAll?.forEach((s: any) => { setorIdMap[s.id] = s.codigo })
-
-        const ESPECIFICO = new Set(['principal', 'coordenador'])
-
-        // Para cada setor, monta sets separados
-        const map: Record<string, { especifico: Set<number>; conjunto: Set<number> }> = {}
-        fsData.forEach((fs: any) => {
-          const cod = setorIdMap[fs.setor_id]
-          if (!cod) return
-          if (!map[cod]) map[cod] = { especifico: new Set(), conjunto: new Set() }
-          const acaoId = (fs.fichas as any).acao_estrategica_id
-          if (ESPECIFICO.has(fs.tipo_participacao)) {
-            map[cod].especifico.add(acaoId)
-          } else {
-            map[cod].conjunto.add(acaoId)
-          }
-        })
-
-        // Converte Sets para arrays; remove da lista "conjunto" ações já em "especifico"
-        const result: Record<string, { especifico: number[]; conjunto: number[] }> = {}
-        for (const [k, v] of Object.entries(map)) {
-          const especificoArr = Array.from(v.especifico)
-          const conjuntoArr = Array.from(v.conjunto).filter(id => !v.especifico.has(id))
-          result[k] = { especifico: especificoArr, conjunto: conjuntoArr }
+      try {
+        const res = await fetch('/api/dashboard/data')
+        if (!res.ok) {
+          if (res.status === 401) router.push('/login')
+          return
         }
-        setSetorAcoes(result)
-      }
+        const data = await res.json()
 
-      setLoading(false)
+        // 1. Processar Ações
+        if (data.acoes) {
+          const sorted = data.acoes
+            .map((a: any) => ({
+              id: a.id,
+              numero: a.numero,
+              nome: a.nome,
+              eixo: a.eixo_nome || '',
+              oe: a.oe_nome || '',
+              estrategia: a.estrategia_nome || '',
+            }))
+            .sort((a: any, b: any) => compareNumero(a.numero, b.numero))
+          setAcoes(sorted)
+        }
+
+        // 2. Setar Filtros
+        if (data.setores) setSetores(data.setores)
+        if (data.eixos) setEixos(data.eixos)
+        if (data.oes) setOes(data.oes)
+
+        // 3. Mapeamento Setor-Ação
+        if (data.fichaSetores) {
+          const ESPECIFICO = new Set(['principal', 'coordenador'])
+          const map: Record<string, { especifico: Set<number>; conjunto: Set<number> }> = {}
+          
+          data.fichaSetores.forEach((fs: any) => {
+            const cod = fs.setor_codigo
+            if (!cod) return
+            if (!map[cod]) map[cod] = { especifico: new Set(), conjunto: new Set() }
+            const acaoId = fs.acao_estrategica_id
+            if (ESPECIFICO.has(fs.tipo_participacao)) {
+              map[cod].especifico.add(acaoId)
+            } else {
+              map[cod].conjunto.add(acaoId)
+            }
+          })
+
+          const result: Record<string, { especifico: number[]; conjunto: number[] }> = {}
+          for (const [k, v] of Object.entries(map)) {
+            const especificoArr = Array.from(v.especifico)
+            const conjuntoArr = Array.from(v.conjunto).filter(id => !v.especifico.has(id))
+            result[k] = { especifico: especificoArr, conjunto: conjuntoArr }
+          }
+          setSetorAcoes(result)
+        }
+      } catch (err) {
+        console.error('Erro ao carregar dashboard', err)
+      } finally {
+        setLoading(false)
+      }
     }
     load()
   }, [])

@@ -1,42 +1,37 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { Clock, LogOut } from 'lucide-react'
 
 export default function PendentePage() {
   const [loading, setLoading] = useState(true)
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     async function check() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        router.push('/login')
-        return
+      try {
+        const res = await fetch('/api/auth/session')
+        if (res.status === 401) {
+          router.push('/login')
+          return
+        }
+        const session = await res.json()
+        if (session.user && session.user.role !== 'solicitante') {
+          router.push('/dashboard')
+          return
+        }
+      } catch (err) {
+        console.error(err)
+      } finally {
+        setLoading(false)
       }
-
-      // Verificar se ainda é solicitante
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single()
-
-      if (profile && profile.role !== 'solicitante') {
-        router.push('/dashboard')
-        return
-      }
-
-      setLoading(false)
     }
     check()
   }, [])
 
   async function handleLogout() {
-    await supabase.auth.signOut()
+    await fetch('/api/auth/logout', { method: 'POST' })
     router.push('/login')
     router.refresh()
   }
@@ -61,9 +56,8 @@ export default function PendentePage() {
         <h1 className="text-xl font-bold text-white mb-2">Cadastro em Análise</h1>
 
         <p className="text-gray-400 text-sm leading-relaxed mb-6">
-          Sua conta foi criada com sucesso. Um administrador precisa aprovar seu acesso
-          antes que você possa utilizar o sistema. Você receberá acesso assim que a aprovação
-          for realizada.
+          Sua conta foi identificada no sistema CBMERJ, mas seu acesso ao Sigplan ainda 
+          está aguardando aprovação de um administrador.
         </p>
 
         <button

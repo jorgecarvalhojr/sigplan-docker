@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { createClient } from '@/lib/supabase'
 import { MessageSquare, Send, ChevronDown, ChevronUp, Check, CheckCheck, Users } from 'lucide-react'
 import type { Profile } from '@/lib/types'
 
@@ -40,7 +39,6 @@ export default function ProjetoMensagens({ projetoId, profile, setoresElegiveis,
   const [sending, setSending] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const supabase = createClient()
 
   useEffect(() => {
     loadMensagens()
@@ -54,120 +52,56 @@ export default function ProjetoMensagens({ projetoId, profile, setoresElegiveis,
 
   async function loadMensagens() {
     setLoading(true)
+    try {
+      const res = await fetch(`/api/mensagens?projetoId=${projetoId}`)
+      if (res.ok) {
+        const data = await res.json()
+        setMensagens(data)
 
-    // Fetch messages for this project
-    const { data: msgs } = await supabase
-      .from('mensagens_projeto')
-      .select('id, projeto_id, autor_id, conteudo, created_at')
-      .eq('projeto_id', projetoId)
-      .order('created_at', { ascending: true })
-
-    if (!msgs) { setLoading(false); return }
-
-    // Fetch author info
-    const autorIds = Array.from(new Set(msgs.map(m => m.autor_id)))
-    let autorMap: Record<string, { nome: string; setor_id: number | null; setor_codigo: string }> = {}
-    if (autorIds.length > 0) {
-      const { data: autores } = await supabase
-        .from('profiles')
-        .select('id, nome, setor_id, setores:setor_id(codigo)')
-        .in('id', autorIds)
-      if (autores) {
-        for (const a of autores) {
-          autorMap[a.id] = { nome: a.nome, setor_id: a.setor_id, setor_codigo: (a as any).setores?.codigo || '' }
-        }
+        // Calculate unread: messages addressed to my sector that I haven't read
+        const mySetorId = profile.setor_id
+        const isAdminOrMaster = profile.role === 'admin' || profile.role === 'master'
+        const unread = data.filter((m: any) => {
+          if (m.autor_id === profile.id) return false
+          if (m.lida_por_mim) return false
+          if (isAdminOrMaster) return true
+          return mySetorId && m.destinatarios.some((d: any) => d.setor_id === mySetorId)
+        })
+        setUnreadCount(unread.length)
       }
+    } catch (err) {
+      console.error('Erro ao carregar mensagens', err)
+    } finally {
+      setLoading(false)
     }
-
-    // Fetch all destinatarios for these messages
-    const msgIds = msgs.map(m => m.id)
-    let destinatariosMap: Record<number, { setor_id: number; codigo: string; nome_completo: string }[]> = {}
-    if (msgIds.length > 0) {
-      const { data: dests } = await supabase
-        .from('mensagem_destinatarios')
-        .select('mensagem_id, setor_id, setores!setor_id(codigo, nome_completo)')
-        .in('mensagem_id', msgIds)
-
-      if (dests) {
-        for (const d of dests) {
-          if (!destinatariosMap[d.mensagem_id]) destinatariosMap[d.mensagem_id] = []
-          destinatariosMap[d.mensagem_id].push({
-            setor_id: d.setor_id,
-            codigo: (d as any).setores?.codigo || '',
-            nome_completo: (d as any).setores?.nome_completo || ''
-          })
-        }
-      }
-    }
-
-    // Fetch read status for current user
-    const { data: leituras } = await supabase
-      .from('mensagem_leituras')
-      .select('mensagem_id')
-      .eq('usuario_id', profile.id)
-      .in('mensagem_id', msgIds.length > 0 ? msgIds : [0])
-
-    const leituraSet = new Set((leituras || []).map(l => l.mensagem_id))
-
-    const mensagensFormatted: MensagemDisplay[] = msgs.map((m: any) => {
-      const autor = autorMap[m.autor_id]
-      return {
-        id: m.id,
-        projeto_id: m.projeto_id,
-        autor_id: m.autor_id,
-        conteudo: m.conteudo,
-        created_at: m.created_at,
-        autor_nome: autor?.nome || 'Usuário removido',
-        autor_setor_codigo: autor?.setor_codigo || '',
-        autor_setor_id: autor?.setor_id || null,
-        destinatarios: destinatariosMap[m.id] || [],
-        lida_por_mim: leituraSet.has(m.id) || m.autor_id === profile.id,
-      }
-    })
-
-    setMensagens(mensagensFormatted)
-
-    // Calculate unread: messages addressed to my sector that I haven't read
-    const mySetorId = profile.setor_id
-    const isAdminOrMaster = profile.role === 'admin' || profile.role === 'master'
-    const unread = mensagensFormatted.filter(m => {
-      if (m.autor_id === profile.id) return false
-      if (m.lida_por_mim) return false
-      if (isAdminOrMaster) return true
-      return mySetorId && m.destinatarios.some(d => d.setor_id === mySetorId)
-    })
-    setUnreadCount(unread.length)
-
-    setLoading(false)
   }
 
   async function marcarComoLida(mensagemId: number) {
-    await supabase.from('mensagem_leituras').upsert({
-      mensagem_id: mensagemId,
-      usuario_id: profile.id,
-    }, { onConflict: 'mensagem_id,usuario_id' })
-
-    setMensagens(prev => prev.map(m => m.id === mensagemId ? { ...m, lida_por_mim: true } : m))
-    setUnreadCount(prev => Math.max(0, prev - 1))
+    try {
+      await fetch('/api/mensagens/lida', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mensagemId })
+      })
+      setMensagens(prev => prev.map(m => m.id === mensagemId ? { ...m, lida_por_mim: true } : m))
+      setUnreadCount(prev => Math.max(0, prev - 1))
+    } catch (err) {
+      console.error('Erro ao marcar como lida', err)
+    }
   }
 
   async function marcarTodasComoLidas() {
-    const mySetorId = profile.setor_id
-    const isAdminOrMaster = profile.role === 'admin' || profile.role === 'master'
-    const unreadMsgs = mensagens.filter(m => {
-      if (m.autor_id === profile.id) return false
-      if (m.lida_por_mim) return false
-      if (isAdminOrMaster) return true
-      return mySetorId && m.destinatarios.some(d => d.setor_id === mySetorId)
-    })
-
-    if (unreadMsgs.length === 0) return
-
-    const inserts = unreadMsgs.map(m => ({ mensagem_id: m.id, usuario_id: profile.id }))
-    await supabase.from('mensagem_leituras').upsert(inserts, { onConflict: 'mensagem_id,usuario_id' })
-
-    setMensagens(prev => prev.map(m => ({ ...m, lida_por_mim: true })))
-    setUnreadCount(0)
+    try {
+      await fetch('/api/mensagens/lida', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projetoId, marcarTodas: true })
+      })
+      setMensagens(prev => prev.map(m => ({ ...m, lida_por_mim: true })))
+      setUnreadCount(0)
+    } catch (err) {
+      console.error('Erro ao marcar todas como lidas', err)
+    }
   }
 
   async function enviarMensagem() {
@@ -176,17 +110,20 @@ export default function ProjetoMensagens({ projetoId, profile, setoresElegiveis,
 
     setSending(true)
     try {
-      const { data: msg, error: msgErr } = await supabase
-        .from('mensagens_projeto')
-        .insert({ projeto_id: projetoId, autor_id: profile.id, conteudo: conteudo.trim() })
-        .select()
-        .single()
+      const res = await fetch('/api/mensagens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          projetoId, 
+          conteudo: conteudo.trim(),
+          destinatarioIds
+        })
+      })
 
-      if (msgErr) throw msgErr
-
-      await supabase.from('mensagem_destinatarios').insert(
-        destinatarioIds.map(sid => ({ mensagem_id: msg.id, setor_id: sid }))
-      )
+      if (!res.ok) {
+        const errorData = await res.json()
+        throw new Error(errorData.error || 'Erro ao enviar')
+      }
 
       setConteudo('')
       setDestinatarioIds([])

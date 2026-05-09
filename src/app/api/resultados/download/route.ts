@@ -1,5 +1,6 @@
+export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
+import { getSession } from '@/lib/session'
 import { getResultadoSignedUrl } from '@/lib/resultados-storage'
 
 // Rota estável de download. Verifica autenticação e redireciona para
@@ -7,9 +8,8 @@ import { getResultadoSignedUrl } from '@/lib/resultados-storage'
 // rota passa a servir o arquivo por outro mecanismo sem quebrar links.
 export async function GET(request: NextRequest) {
   try {
-    const serverSupabase = createServerSupabase()
-    const { data: { user } } = await serverSupabase.auth.getUser()
-    if (!user) {
+    const session = await getSession()
+    if (!session?.user) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
 
@@ -34,3 +34,4 @@ export async function GET(request: NextRequest) {
 }
 
 export const runtime = 'nodejs'
+

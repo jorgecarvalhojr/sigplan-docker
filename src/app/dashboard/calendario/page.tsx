@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { CalendarDays, ChevronLeft, ChevronRight, Filter, X, ExternalLink, Edit3, Save, Plus, Trash2, Loader2 } from 'lucide-react'
 import type { Profile } from '@/lib/types'
@@ -179,64 +178,45 @@ export default function CalendarioPage() {
   const [savingDate, setSavingDate] = useState(false)
 
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
     setLoading(true)
 
-    // Load user profile
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-      if (p) setProfile(p as any)
+    const sessionRes = await fetch('/api/auth/session')
+    if (sessionRes.ok) {
+      const session = await sessionRes.json()
+      if (session.user) {
+        setProfile(session.user as any)
+      }
     }
 
-    const [oesRes, acoesRes, setoresRes, projRes, cfgsRes, solsRes] = await Promise.all([
-      supabase.from('objetivos_estrategicos').select('codigo, nome').order('codigo'),
-      supabase.from('acoes_estrategicas')
-        .select('numero, nome, objetivo_estrategico:objetivo_estrategico_id(codigo)')
-        .order('numero'),
-      supabase.from('setores').select('id, codigo, nome_completo').order('codigo'),
-      supabase.from('projetos')
-        .select(`id, nome, setor_lider_id, data_inicio, responsavel_id, setor_lider:setor_lider_id(codigo, nome_completo),
-          projeto_acoes(acao_estrategica:acao_estrategica_id(numero, nome, objetivo_estrategico:objetivo_estrategico_id(codigo))),
-          entregas(id, nome, data_final_prevista, status, motivo_status, criterios_aceite, dependencias_criticas, responsavel_entrega_id, orgao_responsavel_setor_id,
-            entrega_participantes(id, setor_id, tipo_participante, papel, setor:setor_id(codigo)),
-            atividades(id, nome, data_prevista, status, motivo_status, responsavel_atividade_id,
-              atividade_participantes(id, user_id, setor_id, tipo_participante, papel, setor:setor_id(codigo)))
-          )`)
-        .order('nome'),
-      supabase.from('configuracoes').select('chave, valor'),
-      supabase.from('solicitacoes_alteracao').select('*').eq('status', 'em_analise'),
-    ])
+    // Dados via PostgreSQL Docker
+    const res = await fetch('/api/dados/calendario')
+    if (!res.ok) { setLoading(false); return }
+    const data = await res.json()
 
-    if (oesRes.data) setOes(oesRes.data)
-    if (acoesRes.data) setAcoes(acoesRes.data.map((a: any) => ({
-      numero: a.numero, nome: a.nome, oe_codigo: a.objetivo_estrategico?.codigo || ''
+    if (data.objetivos) setOes(data.objetivos)
+    if (data.acoes) setAcoes(data.acoes.map((a: any) => ({
+      numero: a.numero, nome: a.nome, oe_codigo: a.oe_codigo || '',
     })))
-    if (setoresRes.data) setSetores(setoresRes.data)
-    if (cfgsRes.data) { const m: Record<string, string> = {}; cfgsRes.data.forEach((c: any) => { m[c.chave] = c.valor }); setConfigs(m) }
+    if (data.setores) setSetores(data.setores)
+    if (data.usuarios) setEligibleUsers(data.usuarios)
+    if (data.solicitacoes) setSolicitacoes(data.solicitacoes)
+    if (data.configuracoes) setConfigs(data.configuracoes)
 
-    // Load eligible users for responsavel filter
-    const { data: usersData } = await supabase.from('profiles')
-      .select('id, nome').in('role', ['gestor', 'master', 'admin']).eq('ativo', true).order('nome')
-    if (usersData) setEligibleUsers(usersData)
-    if (solsRes.data) setSolicitacoes(solsRes.data)
-
-    if (projRes.data) {
-      setRawProjetos(projRes.data)
+    if (data.projetos) {
+      setRawProjetos(data.projetos)
       const calItems: CalendarItem[] = []
 
-      projRes.data.forEach((p: any) => {
+      data.projetos.forEach((p: any) => {
         const projetoAcoes = (p.projeto_acoes || []).map((pa: any) => ({
-          numero: pa.acao_estrategica?.numero || '',
-          oe_codigo: pa.acao_estrategica?.objetivo_estrategico?.codigo || '',
+          numero: pa.acao_estrategica?.numero || pa.numero || '',
+          oe_codigo: pa.acao_estrategica?.objetivo_estrategico?.codigo || pa.oe_codigo || '',
         }))
 
         ;(p.entregas || []).forEach((e: any) => {
-          // Collect setores from entrega (incluindo setor líder do projeto)
           const setorSet = new Set<string>()
           if (p.setor_lider?.codigo) setorSet.add(p.setor_lider.codigo)
           e.entrega_participantes?.forEach((ep: any) => {
@@ -245,32 +225,22 @@ export default function CalendarioPage() {
             else if (ep.tipo_participante === 'externo_sedec') setorSet.add('Ext. SEDEC')
           })
 
-          // Collect atividades dates for entrega validation
           const ativDatas = (e.atividades || [])
             .filter((a: any) => a.data_prevista)
             .map((a: any) => ({ nome: a.nome, data: a.data_prevista }))
 
           if (e.data_final_prevista) {
             calItems.push({
-              id: e.id,
-              tipo: 'entrega',
-              nome: e.nome,
-              entrega_nome: null,
+              id: e.id, tipo: 'entrega', nome: e.nome, entrega_nome: null,
               data: e.data_final_prevista,
-              status: e.status || 'aberta',
-              motivo_status: e.motivo_status || null,
-              criterios_aceite: e.criterios_aceite || null,
-              dependencias_criticas: e.dependencias_criticas || null,
-              projeto_id: p.id,
-              projeto_nome: p.nome,
-              setores: Array.from(setorSet),
-              acoes: projetoAcoes,
+              status: e.status || 'aberta', motivo_status: e.motivo_status || null,
+              criterios_aceite: e.criterios_aceite || null, dependencias_criticas: e.dependencias_criticas || null,
+              projeto_id: p.id, projeto_nome: p.nome,
+              setores: Array.from(setorSet), acoes: projetoAcoes,
               setor_lider_id: p.setor_lider_id,
               setor_lider_codigo: p.setor_lider?.codigo || '',
               setor_lider_nome: p.setor_lider?.nome_completo || '',
-              entrega_id: null,
-              entrega_data_final: null,
-              atividades_datas: ativDatas,
+              entrega_id: null, entrega_data_final: null, atividades_datas: ativDatas,
               responsavel_id: e.responsavel_entrega_id || null,
               orgao_responsavel_setor_id: e.orgao_responsavel_setor_id || null,
               responsavel_atividade_id: null,
@@ -289,27 +259,18 @@ export default function CalendarioPage() {
               else if (ap.tipo_participante === 'externo_subsegop') aSetorSet.add('Ext. SUBSEGOP')
               else if (ap.tipo_participante === 'externo_sedec') aSetorSet.add('Ext. SEDEC')
             })
-
             if (a.data_prevista) {
               calItems.push({
-                id: a.id,
-                tipo: 'atividade',
-                nome: a.nome,
-                entrega_nome: e.nome,
+                id: a.id, tipo: 'atividade', nome: a.nome, entrega_nome: e.nome,
                 data: a.data_prevista,
-                status: a.status || 'aberta',
-                motivo_status: a.motivo_status || null,
-                criterios_aceite: null,
-                dependencias_criticas: null,
-                projeto_id: p.id,
-                projeto_nome: p.nome,
-                setores: Array.from(aSetorSet),
-                acoes: projetoAcoes,
+                status: a.status || 'aberta', motivo_status: a.motivo_status || null,
+                criterios_aceite: null, dependencias_criticas: null,
+                projeto_id: p.id, projeto_nome: p.nome,
+                setores: Array.from(aSetorSet), acoes: projetoAcoes,
                 setor_lider_id: p.setor_lider_id,
                 setor_lider_codigo: p.setor_lider?.codigo || '',
                 setor_lider_nome: p.setor_lider?.nome_completo || '',
-                entrega_id: e.id,
-                entrega_data_final: e.data_final_prevista || null,
+                entrega_id: e.id, entrega_data_final: e.data_final_prevista || null,
                 atividades_datas: [],
                 responsavel_id: a.responsavel_atividade_id || null,
                 orgao_responsavel_setor_id: e.orgao_responsavel_setor_id || null,
@@ -322,10 +283,8 @@ export default function CalendarioPage() {
           })
         })
       })
-
       setItems(calItems)
     }
-
     setLoading(false)
   }
 
@@ -473,11 +432,8 @@ export default function CalendarioPage() {
   }
 
   async function auditLog(tipo: string, entidade: string, entidadeId: number, anterior: any, novo: any) {
-    await supabase.from('audit_log').insert({
-      usuario_id: profile!.id, usuario_nome: profile!.nome,
-      tipo_acao: tipo, entidade, entidade_id: entidadeId,
-      conteudo_anterior: anterior, conteudo_novo: novo
-    })
+    // Audit log gerenciado pelo servidor via /api/dados/projeto/[id]
+    // Esta função é mantida por compat apenas — chamadas foram movidas para as rotas de API
   }
 
   // === Create activity from calendar ===
@@ -609,38 +565,30 @@ export default function CalendarioPage() {
 
     setCreateSaving(true)
 
-    const novosDados = {
-      nome: createForm.nome.trim(),
-      descricao: createForm.descricao.trim(),
-      entrega_id: createEntregaId,
-      data_prevista: createDate || null,
-      status: createForm.status,
-      motivo_status: createForm.motivo_status || null,
-      responsavel_atividade_id: createForm.responsavel_atividade_id || null,
-    }
-
-    const { data: newAtiv, error } = await supabase.from('atividades').insert(novosDados).select().single()
-    if (error) { setCreateError(error.message); setCreateSaving(false); return }
-
-    await auditLog('create', 'atividade', newAtiv.id, null, novosDados)
-
-    // Insert participantes
-    if (validP.length > 0) {
-      const { error: insErr } = await supabase.from('atividade_participantes').insert(validP.map((p: any) => ({
-        atividade_id: newAtiv.id,
-        setor_id: p.tipo_participante === 'setor' ? p.setor_id : null,
-        tipo_participante: p.tipo_participante, papel: p.papel.trim()
-      })))
-      if (insErr) { setCreateError(`Erro ao salvar participantes: ${insErr.message}`); setCreateSaving(false); return }
-    }
-
-    // Status coherence: se entrega em status terminal e nova atividade não-terminal → reverter
-    const statusNaoTerminal = !['resolvida', 'cancelada'].includes(createForm.status)
-    const entregaTerminal = createEntrega.status === 'resolvida' || createEntrega.status === 'cancelada'
-    if (entregaTerminal && statusNaoTerminal) {
-      await supabase.from('entregas').update({ status: 'em_andamento' }).eq('id', createEntregaId)
-      await auditLog('update', 'entrega', createEntregaId!, { status: createEntrega.status }, { status: 'em_andamento' })
-      alert(`O status da entrega "${createEntrega.nome}" foi alterado para "Em andamento" pois foi adicionada uma nova atividade.`)
+    // Criação de atividade via PostgreSQL Docker
+    const res = await fetch(`/api/dados/projeto/${createProjeto.id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create_atividade',
+        entrega_id: createEntregaId,
+        nome: createForm.nome.trim(),
+        descricao: createForm.descricao.trim(),
+        data_prevista: createDate || null,
+        status: createForm.status,
+        motivo_status: createForm.motivo_status || null,
+        responsavel_atividade_id: createForm.responsavel_atividade_id || null,
+        participantes: validP.map((p: any) => ({
+          setor_id: p.tipo_participante === 'setor' ? p.setor_id : null,
+          tipo_participante: p.tipo_participante, papel: p.papel.trim(),
+        })),
+        reopen_entrega: true, // se entrega terminal, reverter para em_andamento
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.json()
+      setCreateError(err.error || 'Erro ao criar atividade.')
+      setCreateSaving(false); return
     }
 
     setCreateSaving(false)
@@ -686,30 +634,42 @@ export default function CalendarioPage() {
       const dados = item.tipo === 'entrega'
         ? { data_final_prevista: newDate }
         : { data_prevista: newDate }
-      const { error } = await supabase.from('solicitacoes_alteracao').insert({
-        solicitante_id: profile!.id,
-        solicitante_nome: profile!.nome,
-        tipo_entidade: item.tipo,
-        entidade_id: item.id,
-        entidade_nome: item.nome,
-        projeto_id: item.projeto_id,
-        tipo_operacao: 'edicao',
-        dados_alteracao: dados,
+      // Solicitação via PostgreSQL Docker
+      const res = await fetch(`/api/dados/projeto/${item.projeto_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_solicitacao',
+          tipo_entidade: item.tipo,
+          entidade_id: item.id,
+          entidade_nome: item.nome,
+          tipo_operacao: 'edicao',
+          dados_alteracao: dados,
+        }),
       })
-      if (error) { alert(`Erro ao criar solicitação: ${error.message}`); setSavingDate(false); return }
+      if (!res.ok) {
+        const err = await res.json()
+        alert(`Erro ao criar solicitação: ${err.error}`)
+        setSavingDate(false); return
+      }
       alert('Solicitação enviada para o Gabinete de Gestão de Projetos para avaliação.')
       setEditingDate(false); setSavingDate(false); loadAll(); return
     }
 
-    // Edição direta
-    if (item.tipo === 'entrega') {
-      const { error } = await supabase.from('entregas').update({ data_final_prevista: newDate }).eq('id', item.id)
-      if (error) { alert(error.message); setSavingDate(false); return }
-      await auditLog('update', 'entrega', item.id, { data_final_prevista: item.data }, { data_final_prevista: newDate })
-    } else {
-      const { error } = await supabase.from('atividades').update({ data_prevista: newDate }).eq('id', item.id)
-      if (error) { alert(error.message); setSavingDate(false); return }
-      await auditLog('update', 'atividade', item.id, { data_prevista: item.data }, { data_prevista: newDate })
+    // Edição direta via PostgreSQL Docker
+    const res = await fetch(`/api/dados/projeto/${item.projeto_id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(
+        item.tipo === 'entrega'
+          ? { action: 'update_entrega', id: item.id, data_final_prevista: newDate }
+          : { action: 'update_atividade', id: item.id, data_prevista: newDate }
+      ),
+    })
+    if (!res.ok) {
+      const err = await res.json()
+      alert(err.error || 'Erro ao salvar.')
+      setSavingDate(false); return
     }
 
     setEditingDate(false); setSavingDate(false)

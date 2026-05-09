@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, ChevronDown, ChevronUp, MessageSquarePlus, Send, Clock, CheckCircle, XCircle } from 'lucide-react'
 import { BLOCO_LABELS, STATUS_CONFIG } from '@/lib/utils'
@@ -14,7 +13,6 @@ export default function AcaoPage() {
   const numero = decodeURIComponent(params.numero as string)
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
 
   const [acao, setAcao] = useState<any>(null)
   const [destaque, setDestaque] = useState<DestaqueEstrategico | null>(null)
@@ -38,91 +36,38 @@ export default function AcaoPage() {
   async function loadAll() {
     setLoading(true)
 
-    // Profile
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      const { data: p } = await supabase.from('profiles')
-        .select('*, setores:setor_id(codigo, nome_completo)')
-        .eq('id', user.id).single()
-      if (p) setProfile(p as any)
+    const sessionRes = await fetch('/api/auth/session')
+    if (!sessionRes.ok) { router.push('/login'); setLoading(false); return }
+    const session = await sessionRes.json()
+    if (!session.user) { router.push('/login'); setLoading(false); return }
+    setProfile(session.user as Profile)
+
+    // Dados via PostgreSQL Docker
+    const res = await fetch(`/api/dados/acao/${encodeURIComponent(numero)}`)
+    if (!res.ok) { setLoading(false); return }
+    const data = await res.json()
+
+    if (data.profile) setProfile(data.profile as Profile)
+    if (data.acao) setAcao(data.acao)
+    else { setLoading(false); return }
+
+    if (data.destaque) {
+      data.destaque.linhas?.sort((a: any, b: any) => a.ordem - b.ordem)
+      setDestaque(data.destaque)
     }
-
-    // Ação
-    const { data: acaoData } = await supabase
-      .from('acoes_estrategicas')
-      .select(`*, eixo_prioritario:eixo_prioritario_id(codigo, nome),
-        objetivo_estrategico:objetivo_estrategico_id(codigo, nome),
-        estrategia:estrategia_id(codigo, nome)`)
-      .eq('numero', numero)
-      .single()
-
-    if (!acaoData) { setLoading(false); return }
-    setAcao(acaoData)
-
-    // Destaque
-    const { data: destData } = await supabase
-      .from('destaques_estrategicos')
-      .select('*, linhas:destaque_linhas(id, ordem, tipo, label, conteudo)')
-      .eq('acao_estrategica_id', acaoData.id)
-      .single()
-    if (destData) {
-      destData.linhas?.sort((a: any, b: any) => a.ordem - b.ordem)
-      setDestaque(destData as any)
+    if (data.panoramico) setPanoramico(data.panoramico)
+    if (data.fichas) setFichas(data.fichas)
+    if (data.fundamentacao) {
+      data.fundamentacao.itens?.sort((a: any, b: any) => a.ordem - b.ordem)
+      setFundamentacao(data.fundamentacao)
     }
-
-    // Panorâmico
-    const { data: panData } = await supabase
-      .from('panoramico_linhas')
-      .select('*')
-      .eq('acao_estrategica_id', acaoData.id)
-      .order('ordem')
-    if (panData) setPanoramico(panData)
-
-    // Fichas
-    const { data: fichasData } = await supabase
-      .from('fichas')
-      .select('*')
-      .eq('acao_estrategica_id', acaoData.id)
-      .order('ordem')
-    if (fichasData) setFichas(fichasData)
-
-    // Fundamentação
-    const { data: fundData } = await supabase
-      .from('fundamentacoes')
-      .select('*, itens:fundamentacao_itens(id, ordem, conteudo)')
-      .eq('acao_estrategica_id', acaoData.id)
-      .single()
-    if (fundData) {
-      fundData.itens?.sort((a: any, b: any) => a.ordem - b.ordem)
-      setFundamentacao(fundData as any)
-    }
+    if (data.observacoes) setObservacoes(data.observacoes)
 
     // Configurações
-    const { data: configData, error: configError } = await supabase.from('configuracoes').select('chave, valor')
-    if (configError) {
-      console.error('Erro ao carregar configurações:', configError)
-      // Fallback: permitir tudo se não conseguir ler config
-      setObsPermitida(true)
-      setObsVisivel(true)
-    } else if (configData && configData.length > 0) {
-      const configMap: Record<string, string> = {}
-      configData.forEach((c: any) => { configMap[c.chave] = c.valor })
-      setObsPermitida(configMap['obs_permitir_criacao'] !== 'false')
-      setObsVisivel(configMap['obs_exibir_para_usuarios'] !== 'false')
-    } else {
-      // Tabela vazia ou não existe: fallback para permitir
-      setObsPermitida(true)
-      setObsVisivel(true)
-    }
+    const cfg = data.configuracoes || {}
+    setObsPermitida(cfg['obs_permitir_criacao'] !== 'false')
+    setObsVisivel(cfg['obs_exibir_para_usuarios'] !== 'false')
     setConfigLoaded(true)
-
-    // Observações
-    const { data: obsData } = await supabase
-      .from('observacoes')
-      .select('*')
-      .eq('acao_estrategica_id', acaoData.id)
-      .order('created_at', { ascending: false })
-    if (obsData) setObservacoes(obsData)
 
     setLoading(false)
   }
@@ -135,26 +80,21 @@ export default function AcaoPage() {
     if (!obsForm || !obsForm.text.trim() || !profile || !acao) return
     setSending(true)
 
-    const setorNome = (profile as any).setores?.nome_completo || (profile as any).setores?.codigo || null
-
-    await supabase.from('observacoes').insert({
-      acao_estrategica_id: acao.id,
-      bloco: obsForm.bloco,
-      conteudo: obsForm.text.trim(),
-      autor_id: profile.id,
-      autor_nome: profile.nome,
-      autor_setor: setorNome,
+    // Mutação via PostgreSQL Docker
+    await fetch(`/api/dados/acao/${encodeURIComponent(numero)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_observacao',
+        bloco: obsForm.bloco,
+        conteudo: obsForm.text.trim(),
+      }),
     })
 
     setObsForm(null)
     setSending(false)
-    // Reload obs
-    const { data } = await supabase
-      .from('observacoes')
-      .select('*')
-      .eq('acao_estrategica_id', acao.id)
-      .order('created_at', { ascending: false })
-    if (data) setObservacoes(data)
+    // Recarregar observações
+    loadAll()
   }
 
   function obsForBloco(bloco: string) {

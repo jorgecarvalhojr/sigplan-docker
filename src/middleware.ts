@@ -1,83 +1,41 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { decrypt } from '@/lib/session'
 
 export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({ request: { headers: request.headers } })
+  const sessionToken = request.cookies.get('session')?.value
+  const session = sessionToken ? await decrypt(sessionToken) : null
+  const user = session?.user
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return request.cookies.get(name)?.value
-        },
-        set(name: string, value: string, options: CookieOptions) {
-          request.cookies.set({ name, value, ...options })
-          response = NextResponse.next({ request: { headers: request.headers } })
-          response.cookies.set({ name, value, ...options })
-        },
-        remove(name: string, options: CookieOptions) {
-          request.cookies.set({ name, value: '', ...options })
-          response = NextResponse.next({ request: { headers: request.headers } })
-          response.cookies.set({ name, value: '', ...options })
-        },
-      },
-    }
-  )
+  const { pathname } = request.nextUrl
 
-  const { data: { user } } = await supabase.auth.getUser()
-
-  // Protected routes - redirect unauthenticated users
-  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
-    return NextResponse.redirect(new URL('/login', request.url))
-  }
-  if (!user && request.nextUrl.pathname.startsWith('/admin')) {
+  // 1. Rotas protegidas (Dashboard e Admin)
+  if (!user && (pathname.startsWith('/dashboard') || pathname.startsWith('/admin'))) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Block solicitante users from dashboard/admin
-  if (user && (request.nextUrl.pathname.startsWith('/dashboard') || request.nextUrl.pathname.startsWith('/admin'))) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (!profile || profile.role === 'solicitante') {
+  // 2. Proteção contra perfil 'solicitante' (pendente de aprovação)
+  if (user && (pathname.startsWith('/dashboard') || pathname.startsWith('/admin'))) {
+    if (user.role === 'solicitante') {
       return NextResponse.redirect(new URL('/pendente', request.url))
     }
   }
 
-  // Redirect logged-in users from login page
-  if (user && request.nextUrl.pathname === '/login') {
-    // Check if solicitante — send to /pendente instead of /dashboard
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (!profile || profile.role === 'solicitante') {
+  // 3. Redirecionar usuários logados para fora da página de login
+  if (user && pathname === '/login') {
+    if (user.role === 'solicitante') {
       return NextResponse.redirect(new URL('/pendente', request.url))
     }
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
-  // /pendente page — if user is not solicitante, redirect to dashboard
-  if (user && request.nextUrl.pathname === '/pendente') {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (profile && profile.role !== 'solicitante') {
+  // 4. Redirecionar da página /pendente se já aprovado
+  if (user && pathname === '/pendente') {
+    if (user.role !== 'solicitante') {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
   }
 
-  return response
+  return NextResponse.next()
 }
 
 export const config = {

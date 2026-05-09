@@ -1,25 +1,48 @@
 /**
  * Módulo único de acesso ao storage de "Resultados e Produtos".
  *
- * É o ÚNICO arquivo do projeto que deve conhecer o backend de storage
- * (atualmente Supabase Storage, bucket privado `resultados`). Qualquer
- * migração futura para hospedagem institucional (S3, MinIO, filesystem
- * local, etc.) deve se resumir a reescrever este arquivo — nem a UI,
- * nem as rotas de API, nem o banco precisarão mudar, já que:
+ * Backend migrado de Supabase Storage → MinIO (S3-compatible).
+ * A interface pública (funções exportadas) permanece IDÊNTICA —
+ * nenhuma rota de API ou componente de UI precisa mudar.
  *
  *  - O banco guarda apenas um `path` lógico relativo (ex.
  *    `entregas/42/7d3f…b91.pdf`), nunca URLs do provedor.
- *  - A UI linka sempre para `/api/resultados/download?path=...`, que
- *    internamente chama `getResultadoSignedUrl()` deste módulo.
- *  - Uploads passam por `/api/resultados/upload`, que chama
- *    `uploadResultadoPDF()` deste módulo.
+ *  - A UI linka sempre para `/api/resultados/download?path=...`
+ *  - Uploads passam por `/api/resultados/upload`
  */
 
-import { createAdminClient } from './supabase-admin'
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectsCommand,
+  GetObjectCommand,
+} from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
-export const RESULTADOS_BUCKET = 'resultados'
+// ─── Configuração do cliente S3/MinIO ────────────────────────────────────────
+
+function createS3Client(customEndpoint?: string) {
+  const endpoint = customEndpoint || process.env.MINIO_ENDPOINT
+  if (!endpoint) throw new Error('MINIO_ENDPOINT não definida')
+
+  return new S3Client({
+    endpoint,
+    region: process.env.MINIO_REGION || 'us-east-1', // MinIO ignora, mas SDK exige
+    credentials: {
+      accessKeyId: process.env.MINIO_ACCESS_KEY!,
+      secretAccessKey: process.env.MINIO_SECRET_KEY!,
+    },
+    forcePathStyle: true, // OBRIGATÓRIO para MinIO (bucket no path, não no host)
+  })
+}
+
+// ─── Constantes públicas ──────────────────────────────────────────────────────
+
+export const RESULTADOS_BUCKET = process.env.MINIO_BUCKET_RESULTADOS || 'resultados'
 export const RESULTADOS_MAX_BYTES = 4 * 1024 * 1024 // 4 MB
 export const RESULTADOS_ALLOWED_MIME = 'application/pdf'
+
+// ─── Tipos ────────────────────────────────────────────────────────────────────
 
 export type ResultadoOwner =
   | { kind: 'entrega'; entregaId: number }
@@ -31,18 +54,17 @@ export interface ResultadoFileMeta {
   tamanho: number
 }
 
+// ─── Helpers internos ─────────────────────────────────────────────────────────
+
 function ownerPrefix(owner: ResultadoOwner): string {
   if (owner.kind === 'entrega') return `entregas/${owner.entregaId}`
   return `atividades/${owner.atividadeId}`
 }
 
 function randomId(): string {
-  // UUID v4 simples sem depender do crypto global (Node 18+ tem crypto.randomUUID)
-  // mas para segurança usamos crypto.randomUUID quando disponível.
   if (typeof globalThis.crypto !== 'undefined' && typeof globalThis.crypto.randomUUID === 'function') {
     return globalThis.crypto.randomUUID()
   }
-  // fallback
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
     const r = (Math.random() * 16) | 0
     const v = c === 'x' ? r : (r & 0x3) | 0x8
@@ -51,14 +73,15 @@ function randomId(): string {
 }
 
 function sanitizeOriginalName(name: string): string {
-  // Preserva apenas caracteres seguros e limita comprimento — só para exibição.
   const base = name.replace(/[\r\n\t]/g, ' ').trim()
   return base.length > 180 ? base.slice(0, 180) : base
 }
 
+// ─── Interface pública ────────────────────────────────────────────────────────
+
 /**
- * Faz upload do PDF para o backend de storage.
- * Deve ser chamado apenas no server (rota de API) — usa service role.
+ * Faz upload do PDF para o MinIO.
+ * Deve ser chamado apenas no server (rota de API).
  */
 export async function uploadResultadoPDF(
   file: {
@@ -79,20 +102,17 @@ export async function uploadResultadoPDF(
     throw new Error('Arquivo vazio.')
   }
 
-  const admin = createAdminClient()
+  const s3 = createS3Client()
   const path = `${ownerPrefix(owner)}/${randomId()}.pdf`
   const buffer = Buffer.from(await file.arrayBuffer())
 
-  const { error } = await admin.storage
-    .from(RESULTADOS_BUCKET)
-    .upload(path, buffer, {
-      contentType: RESULTADOS_ALLOWED_MIME,
-      upsert: false,
-    })
-
-  if (error) {
-    throw new Error(`Falha ao enviar arquivo: ${error.message}`)
-  }
+  await s3.send(new PutObjectCommand({
+    Bucket: RESULTADOS_BUCKET,
+    Key: path,
+    Body: buffer,
+    ContentType: RESULTADOS_ALLOWED_MIME,
+    ContentLength: file.size,
+  }))
 
   return {
     path,
@@ -102,14 +122,23 @@ export async function uploadResultadoPDF(
 }
 
 /**
- * Remove um arquivo pelo path lógico. Falhas são ignoradas para não
- * bloquear a remoção dos metadados no banco (o worst case é um arquivo
- * órfão no bucket, que pode ser limpo por rotina offline).
+ * Remove um arquivo pelo path lógico.
+ * Falhas são ignoradas para não bloquear remoção de metadados no banco.
  */
 export async function deleteResultadoPDF(path: string): Promise<void> {
   if (!path) return
-  const admin = createAdminClient()
-  await admin.storage.from(RESULTADOS_BUCKET).remove([path]).catch(() => {})
+  try {
+    const s3 = createS3Client()
+    await s3.send(new DeleteObjectsCommand({
+      Bucket: RESULTADOS_BUCKET,
+      Delete: {
+        Objects: [{ Key: path }],
+        Quiet: true,
+      },
+    }))
+  } catch {
+    // Ignorar falhas — pior caso: arquivo órfão no bucket
+  }
 }
 
 /**
@@ -121,14 +150,18 @@ export async function getResultadoSignedUrl(
   ttlSeconds: number = 60
 ): Promise<string> {
   if (!path) throw new Error('Path obrigatório.')
-  const admin = createAdminClient()
-  const { data, error } = await admin.storage
-    .from(RESULTADOS_BUCKET)
-    .createSignedUrl(path, ttlSeconds)
-  if (error || !data?.signedUrl) {
-    throw new Error(`Falha ao gerar URL: ${error?.message || 'desconhecida'}`)
-  }
-  return data.signedUrl
+
+  // Para gerar a URL assinada, usamos o endpoint externo (ex.: localhost)
+  // se disponível, para que o navegador consiga acessar.
+  const endpoint = process.env.MINIO_ENDPOINT_EXTERNAL || process.env.MINIO_ENDPOINT
+  const s3 = createS3Client(endpoint)
+  const command = new GetObjectCommand({
+    Bucket: RESULTADOS_BUCKET,
+    Key: path,
+  })
+
+  const url = await getSignedUrl(s3, command, { expiresIn: ttlSeconds })
+  return url
 }
 
 /**

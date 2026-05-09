@@ -1,9 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Check, X, MessageSquare, Users, FileEdit, Save, ChevronDown, ChevronUp, ExternalLink, Settings, History, Building2, Plus, AlertTriangle, ArrowRight, Edit3, Trash2, ClipboardList } from 'lucide-react'
+import { ArrowLeft, Check, X, MessageSquare, Users, FileEdit, Save, ChevronDown, ChevronUp, ExternalLink, Settings, History, Building2, Plus, AlertTriangle, ArrowRight, Edit3, Trash2, ClipboardList, Loader2 } from 'lucide-react'
 import { STATUS_CONFIG, BLOCO_LABELS } from '@/lib/utils'
 import type { Profile } from '@/lib/types'
 
@@ -17,13 +16,18 @@ export default function AdminPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     async function check() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
-      const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+      const res = await fetch('/api/auth/session')
+      if (!res.ok) { router.push('/login'); return }
+      const session = await res.json()
+      const user = session.user
+
+      const profileRes = await fetch('/api/dados/perfil')
+      if (!profileRes.ok) { router.push('/login'); return }
+      const data = await profileRes.json()
+
       if (!data || (data.role !== 'admin' && data.role !== 'master')) { router.push('/dashboard'); return }
       setProfile(data)
       // Master inicia na tab solicitações
@@ -90,36 +94,38 @@ function ObservacoesAdmin() {
   const [blocoFilter, setBlocoFilter] = useState('')
   const [resposta, setResposta] = useState<Record<number, string>>({})
   const [updating, setUpdating] = useState<number | null>(null)
-  const supabase = createClient()
 
   useEffect(() => { loadObs() }, [statusFilter, blocoFilter])
 
   async function loadObs() {
-    let q = supabase
-      .from('observacoes')
-      .select('*, acoes_estrategicas!inner(numero, nome)')
-      .order('created_at', { ascending: false })
-
-    if (statusFilter) q = q.eq('status', statusFilter)
-    if (blocoFilter) q = q.eq('bloco', blocoFilter)
-    const { data } = await q
-    if (data) setObs(data)
+    const params = new URLSearchParams({ type: 'observacoes' })
+    if (statusFilter) params.append('status', statusFilter)
+    if (blocoFilter) params.append('bloco', blocoFilter)
+    
+    const res = await fetch(`/api/admin?${params.toString()}`)
+    if (res.ok) {
+      const data = await res.json()
+      setObs(data.map((o: any) => ({
+        ...o,
+        acoes_estrategicas: { numero: o.acao_numero, nome: o.acao_nome }
+      })))
+    }
   }
 
   async function updateStatus(id: number, status: string) {
     setUpdating(id)
-    const { data: { user } } = await supabase.auth.getUser()
+    const res = await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_obs',
+        payload: { id, status, resposta_admin: resposta[id] || null }
+      })
+    })
 
-    const { error } = await supabase.from('observacoes').update({
-      status,
-      resposta_admin: resposta[id] || null,
-      respondido_por: user?.id,
-      respondido_em: new Date().toISOString(),
-    }).eq('id', id)
-
-    if (error) {
-      console.error('Erro ao atualizar observação:', error)
-      alert(`Erro: ${error.message}`)
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
     }
 
     setUpdating(null)
@@ -240,14 +246,11 @@ function ConteudoAdmin() {
   const [setoresList, setSetoresList] = useState<any[]>([])
   const [panSetores, setPanSetores] = useState<Record<number, any[]>>({})  // panoramico_linha_id → [{id, setor_id, tipo_participacao}]
   const [fichaSetores, setFichaSetores] = useState<Record<number, any[]>>({})  // ficha_id → [{id, setor_id, tipo_participacao}]
-  const supabase = createClient()
   const router = useRouter()
 
   useEffect(() => {
-    supabase.from('acoes_estrategicas').select('id, numero, nome').order('numero')
-      .then(({ data }) => { if (data) setAcoes(data) })
-    supabase.from('setores').select('id, codigo, nome_completo').order('codigo')
-      .then(({ data }) => { if (data) setSetoresList(data) })
+    fetch('/api/admin/conteudo').then(res => res.json()).then(data => { if (Array.isArray(data)) setAcoes(data) })
+    fetch('/api/admin?type=setores').then(res => res.json()).then(data => { if (Array.isArray(data)) setSetoresList(data) })
   }, [])
 
   async function selectAcao(acao: any) {
@@ -255,63 +258,55 @@ function ConteudoAdmin() {
     setExpandedBlock(null)
     setSaved(null)
 
-    const { data: full } = await supabase.from('acoes_estrategicas').select('*').eq('id', acao.id).single()
-    if (full) {
+    const res = await fetch(`/api/admin/conteudo?acaoId=${acao.id}`)
+    if (res.ok) {
+      const data = await res.json()
+      const { acao: full, destaque: destData, destaqueLinhas: linhas, panoramico: panData, panSetores: psData, fichas: fichasData, fichaSetores: fsData, fundamentacao: fundData, fundItens: itens } = data
+      
       setEditData({
         descricao_o_que: full.descricao_o_que || '',
         descricao_para_que: full.descricao_para_que || '',
         ancoragem: full.ancoragem || '',
         nota_arranjo_institucional: full.nota_arranjo_institucional || '',
       })
-    }
 
-    const { data: destData } = await supabase.from('destaques_estrategicos').select('*').eq('acao_estrategica_id', acao.id).single()
-    setDestaque(destData)
-    if (destData) {
-      const { data: linhas } = await supabase.from('destaque_linhas').select('*').eq('destaque_id', destData.id).order('ordem')
+      setDestaque(destData)
       setDestaqueLinhas(linhas || [])
-    } else { setDestaqueLinhas([]) }
+      setPanoramico(panData || [])
 
-    const { data: panData } = await supabase.from('panoramico_linhas').select('*').eq('acao_estrategica_id', acao.id).order('ordem')
-    setPanoramico(panData || [])
-
-    // Load panoramico N:N
-    if (panData && panData.length > 0) {
-      const panIds = panData.map((p: any) => p.id)
-      const { data: psData } = await supabase.from('panoramico_setores').select('*').in('panoramico_linha_id', panIds)
       const psMap: Record<number, any[]> = {}
-      panIds.forEach((pid: number) => { psMap[pid] = [] })
-      psData?.forEach((ps: any) => { if (psMap[ps.panoramico_linha_id]) psMap[ps.panoramico_linha_id].push(ps); else psMap[ps.panoramico_linha_id] = [ps] })
+      panData?.forEach((p: any) => { psMap[p.id] = [] })
+      psData?.forEach((ps: any) => { if (psMap[ps.panoramico_linha_id]) psMap[ps.panoramico_linha_id].push(ps) })
       setPanSetores(psMap)
-    } else { setPanSetores({}) }
 
-    const { data: fichasData } = await supabase.from('fichas').select('*').eq('acao_estrategica_id', acao.id).order('ordem')
-    setFichas(fichasData || [])
-
-    // Load fichas N:N
-    if (fichasData && fichasData.length > 0) {
-      const fichaIds = fichasData.map((f: any) => f.id)
-      const { data: fsData } = await supabase.from('ficha_setores').select('*').in('ficha_id', fichaIds)
+      setFichas(fichasData || [])
       const fsMap: Record<number, any[]> = {}
-      fichaIds.forEach((fid: number) => { fsMap[fid] = [] })
-      fsData?.forEach((fs: any) => { if (fsMap[fs.ficha_id]) fsMap[fs.ficha_id].push(fs); else fsMap[fs.ficha_id] = [fs] })
+      fichasData?.forEach((f: any) => { fsMap[f.id] = [] })
+      fsData?.forEach((fs: any) => { if (fsMap[fs.ficha_id]) fsMap[fs.ficha_id].push(fs) })
       setFichaSetores(fsMap)
-    } else { setFichaSetores({}) }
 
-    const { data: fundData } = await supabase.from('fundamentacoes').select('*').eq('acao_estrategica_id', acao.id).single()
-    setFundamentacao(fundData)
-    if (fundData) {
-      const { data: itens } = await supabase.from('fundamentacao_itens').select('*').eq('fundamentacao_id', fundData.id).order('ordem')
+      setFundamentacao(fundData)
       setFundItens(itens || [])
-    } else { setFundItens([]) }
+    }
   }
 
   async function saveField(field: string) {
     if (!selectedAcao) return
     setSaving(field)
-    const { error } = await supabase.from('acoes_estrategicas').update({ [field]: editData[field] || null }).eq('id', selectedAcao.id)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(field); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_acao_field',
+        payload: { id: selectedAcao.id, field, value: editData[field] || null }
+      })
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    } else {
+      setSaved(field); setTimeout(() => setSaved(null), 2500)
+    }
     setSaving(null)
   }
 
@@ -320,9 +315,20 @@ function ConteudoAdmin() {
     if (!item) return
     const key = `dl-${id}`
     setSaving(key)
-    const { error } = await supabase.from('destaque_linhas').update({ conteudo: item.conteudo }).eq('id', id)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(key); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_destaque_linha',
+        payload: { id, conteudo: item.conteudo }
+      })
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    } else {
+      setSaved(key); setTimeout(() => setSaved(null), 2500)
+    }
     setSaving(null)
   }
 
@@ -331,12 +337,20 @@ function ConteudoAdmin() {
     if (!item) return
     const key = `pan-${id}`
     setSaving(key)
-    const { error } = await supabase.from('panoramico_linhas').update({
-      sintese_contribuicao: item.sintese_contribuicao,
-      nao_faz: item.nao_faz,
-    }).eq('id', id)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(key); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_panoramico_linha',
+        payload: item
+      })
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    } else {
+      setSaved(key); setTimeout(() => setSaved(null), 2500)
+    }
     setSaving(null)
   }
 
@@ -351,9 +365,20 @@ function ConteudoAdmin() {
       value = value.filter((l: string) => l.trim())
       setFichas(prev => prev.map(x => x.id === fichaId ? { ...x, [field]: value } : x))
     }
-    const { error } = await supabase.from('fichas').update({ [field]: value }).eq('id', fichaId)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(key); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_ficha_field',
+        payload: { id: fichaId, field, value }
+      })
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    } else {
+      setSaved(key); setTimeout(() => setSaved(null), 2500)
+    }
     setSaving(null)
   }
 
@@ -361,9 +386,20 @@ function ConteudoAdmin() {
     if (!fundamentacao) return
     const key = `fund-${field}`
     setSaving(key)
-    const { error } = await supabase.from('fundamentacoes').update({ [field]: fundamentacao[field] }).eq('id', fundamentacao.id)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(key); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_fund_field',
+        payload: { id: fundamentacao.id, field, value: fundamentacao[field] }
+      })
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    } else {
+      setSaved(key); setTimeout(() => setSaved(null), 2500)
+    }
     setSaving(null)
   }
 
@@ -372,9 +408,20 @@ function ConteudoAdmin() {
     if (!item) return
     const key = `fi-${id}`
     setSaving(key)
-    const { error } = await supabase.from('fundamentacao_itens').update({ conteudo: item.conteudo }).eq('id', id)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(key); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_fund_item',
+        payload: { id, conteudo: item.conteudo }
+      })
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    } else {
+      setSaved(key); setTimeout(() => setSaved(null), 2500)
+    }
     setSaving(null)
   }
 
@@ -383,26 +430,44 @@ function ConteudoAdmin() {
   async function addPanoramicoLinha() {
     if (!selectedAcao) return
     const maxOrdem = panoramico.reduce((m, p) => Math.max(m, p.ordem || 0), 0)
-    const { data, error } = await supabase.from('panoramico_linhas').insert({
-      acao_estrategica_id: selectedAcao.id,
-      ordem: maxOrdem + 1,
-      setor_display: 'Novo Setor',
-      papel: '',
-      sintese_contribuicao: '',
-      nao_faz: '',
-    }).select().single()
-    if (error) { alert(`Erro ao criar: ${error.message}`); return }
-    setPanoramico(prev => [...prev, data])
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_panoramico_linha',
+        payload: {
+          acaoId: selectedAcao.id,
+          ordem: maxOrdem + 1,
+          setor_display: 'Novo Setor',
+          papel: '',
+          sintese_contribuicao: '',
+          nao_faz: '',
+        }
+      })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setPanoramico(prev => [...prev, data])
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function deletePanoramicoLinha(id: number) {
     const item = panoramico.find(x => x.id === id)
     if (!confirm(`Remover "${item?.setor_display}" do quadro panorâmico?`)) return
-    // Remove vinculações N:N primeiro
-    await supabase.from('panoramico_setores').delete().eq('panoramico_linha_id', id)
-    const { error } = await supabase.from('panoramico_linhas').delete().eq('id', id)
-    if (error) { alert(`Erro: ${error.message}`); return }
-    setPanoramico(prev => prev.filter(x => x.id !== id))
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete_panoramico_linha', payload: { id } })
+    })
+    if (res.ok) {
+      setPanoramico(prev => prev.filter(x => x.id !== id))
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function savePanoramicoMeta(id: number) {
@@ -410,14 +475,17 @@ function ConteudoAdmin() {
     if (!item) return
     const key = `pan-meta-${id}`
     setSaving(key)
-    const { error } = await supabase.from('panoramico_linhas').update({
-      setor_display: item.setor_display,
-      papel: item.papel,
-      sintese_contribuicao: item.sintese_contribuicao,
-      nao_faz: item.nao_faz,
-    }).eq('id', id)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(key); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_panoramico_linha', payload: item })
+    })
+    if (res.ok) {
+      setSaved(key); setTimeout(() => setSaved(null), 2500)
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
     setSaving(null)
   }
 
@@ -426,29 +494,47 @@ function ConteudoAdmin() {
   async function addFicha() {
     if (!selectedAcao) return
     const maxOrdem = fichas.reduce((m, f) => Math.max(m, f.ordem || 0), 0)
-    const { data, error } = await supabase.from('fichas').insert({
-      acao_estrategica_id: selectedAcao.id,
-      ordem: maxOrdem + 1,
-      titulo: 'Nova Ficha — Setor',
-      setor_display: 'Novo Setor',
-      papel: '',
-      justificativa: '',
-      contribuicao_esperada: [],
-      nao_escopo: [],
-      dependencias_criticas: [],
-    }).select().single()
-    if (error) { alert(`Erro ao criar: ${error.message}`); return }
-    setFichas(prev => [...prev, data])
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_ficha',
+        payload: {
+          acaoId: selectedAcao.id,
+          ordem: maxOrdem + 1,
+          titulo: 'Nova Ficha — Setor',
+          setor_display: 'Novo Setor',
+          papel: '',
+          justificativa: '',
+          contribuicao_esperada: [],
+          nao_escopo: [],
+          dependencias_criticas: [],
+        }
+      })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setFichas(prev => [...prev, data])
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function deleteFicha(id: number) {
     const item = fichas.find(x => x.id === id)
     if (!confirm(`Remover ficha "${item?.titulo}"? Esta ação é permanente.`)) return
-    // Remove vinculações N:N primeiro
-    await supabase.from('ficha_setores').delete().eq('ficha_id', id)
-    const { error } = await supabase.from('fichas').delete().eq('id', id)
-    if (error) { alert(`Erro: ${error.message}`); return }
-    setFichas(prev => prev.filter(x => x.id !== id))
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete_ficha', payload: { id } })
+    })
+    if (res.ok) {
+      setFichas(prev => prev.filter(x => x.id !== id))
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function saveFichaMeta(fichaId: number) {
@@ -456,13 +542,20 @@ function ConteudoAdmin() {
     if (!item) return
     const key = `f-meta-${fichaId}`
     setSaving(key)
-    const { error } = await supabase.from('fichas').update({
-      titulo: item.titulo,
-      setor_display: item.setor_display,
-      papel: item.papel,
-    }).eq('id', fichaId)
-    if (error) alert(`Erro: ${error.message}`)
-    else { setSaved(key); setTimeout(() => setSaved(null), 2500) }
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'update_ficha_meta',
+        payload: { id: fichaId, titulo: item.titulo, setor_display: item.setor_display, papel: item.papel }
+      })
+    })
+    if (res.ok) {
+      setSaved(key); setTimeout(() => setSaved(null), 2500)
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
     setSaving(null)
   }
 
@@ -478,31 +571,67 @@ function ConteudoAdmin() {
   ]
 
   async function addPanSetor(panLinhaId: number, setorId: number, tipo: string) {
-    const { data, error } = await supabase.from('panoramico_setores').insert({
-      panoramico_linha_id: panLinhaId, setor_id: setorId, tipo_participacao: tipo,
-    }).select().single()
-    if (error) { alert(`Erro: ${error.message}`); return }
-    setPanSetores(prev => ({ ...prev, [panLinhaId]: [...(prev[panLinhaId] || []), data] }))
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_pan_setor',
+        payload: { panLinhaId, setorId, tipo }
+      })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setPanSetores(prev => ({ ...prev, [panLinhaId]: [...(prev[panLinhaId] || []), data] }))
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function removePanSetor(panLinhaId: number, vinculoId: number) {
-    const { error } = await supabase.from('panoramico_setores').delete().eq('id', vinculoId)
-    if (error) { alert(`Erro: ${error.message}`); return }
-    setPanSetores(prev => ({ ...prev, [panLinhaId]: (prev[panLinhaId] || []).filter(x => x.id !== vinculoId) }))
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'remove_pan_setor', payload: { id: vinculoId } })
+    })
+    if (res.ok) {
+      setPanSetores(prev => ({ ...prev, [panLinhaId]: (prev[panLinhaId] || []).filter(x => x.id !== vinculoId) }))
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function addFichaSetor(fichaId: number, setorId: number, tipo: string) {
-    const { data, error } = await supabase.from('ficha_setores').insert({
-      ficha_id: fichaId, setor_id: setorId, tipo_participacao: tipo,
-    }).select().single()
-    if (error) { alert(`Erro: ${error.message}`); return }
-    setFichaSetores(prev => ({ ...prev, [fichaId]: [...(prev[fichaId] || []), data] }))
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'add_ficha_setor',
+        payload: { fichaId, setorId, tipo }
+      })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setFichaSetores(prev => ({ ...prev, [fichaId]: [...(prev[fichaId] || []), data] }))
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function removeFichaSetor(fichaId: number, vinculoId: number) {
-    const { error } = await supabase.from('ficha_setores').delete().eq('id', vinculoId)
-    if (error) { alert(`Erro: ${error.message}`); return }
-    setFichaSetores(prev => ({ ...prev, [fichaId]: (prev[fichaId] || []).filter(x => x.id !== vinculoId) }))
+    const res = await fetch('/api/admin/conteudo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'remove_ficha_setor', payload: { id: vinculoId } })
+    })
+    if (res.ok) {
+      setFichaSetores(prev => ({ ...prev, [fichaId]: (prev[fichaId] || []).filter(x => x.id !== vinculoId) }))
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   function VinculoSetorManager({ vinculos, onAdd, onRemove }: {
@@ -961,18 +1090,15 @@ function UsuariosAdmin({ isMaster = false, adminProfile: profile }: { isMaster?:
   const [savingUser, setSavingUser] = useState<string | null>(null)
   const [resetConfirm, setResetConfirm] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
-  const supabase = createClient()
 
   useEffect(() => {
-    supabase.from('profiles').select('*, setores:setor_id(codigo, nome_completo)').order('nome')
-      .then(({ data }) => { if (data) setUsers(data) })
-    supabase.from('setores').select('id, codigo, nome_completo, visivel_cadastro').order('codigo')
-      .then(({ data }) => {
-        if (data) {
-          setSetores(data)
-          setSetoresCadastro(data.filter((s: any) => s.visivel_cadastro))
-        }
-      })
+    fetch('/api/admin?type=usuarios').then(res => res.json()).then(data => { if (Array.isArray(data)) setUsers(data) })
+    fetch('/api/admin?type=setores').then(res => res.json()).then(data => {
+      if (Array.isArray(data)) {
+        setSetores(data)
+        setSetoresCadastro(data.filter((s: any) => s.visivel_cadastro))
+      }
+    })
   }, [])
 
   async function updateRole(userId: string, newRole: string) {
@@ -980,146 +1106,59 @@ function UsuariosAdmin({ isMaster = false, adminProfile: profile }: { isMaster?:
       const roleLabel = newRole === 'usuario' ? 'Usuário' : 'Solicitante'
       if (!confirm(`Alterar perfil para '${roleLabel}' remove todas as permissões de edição. Confirma?`)) return
     }
-    const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', userId)
-    if (error) { alert(`Erro: ${error.message}`); return }
-    setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u))
+    const res = await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_user_role', payload: { userId, role: newRole } })
+    })
+    if (res.ok) {
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole } : u))
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
+    }
   }
 
   async function updateSetor(userId: string, setorId: number | null) {
     const user = users.find(u => u.id === userId)
     if (!user) return
     const oldSetorId = user.setor_id
-    const newSetorId = setorId
-
-    // If setor didn't change, skip
-    if (oldSetorId === newSetorId) return
+    if (oldSetorId === setorId) return
 
     const oldSetor = setores.find((s: any) => s.id === oldSetorId)
-    const newSetor = setores.find((s: any) => s.id === newSetorId)
+    const newSetor = setores.find((s: any) => s.id === setorId)
     const oldSetorCodigo = oldSetor?.codigo || 'Nenhum'
     const newSetorCodigo = newSetor?.codigo || 'Nenhum'
 
-    // Query impact before updating
-    let entregasCount = 0
-    let atividadesCount = 0
-    let projetosPerdeCount = 0
-    let projetosGanhaCount = 0
+    try {
+      const impactRes = await fetch(`/api/admin?type=user_setor_impact&userId=${userId}&oldSetorId=${oldSetorId}&newSetorId=${setorId}`)
+      const impact = await impactRes.json()
+      
+      const { entregasCount, atividadesCount, projetosPerdeCount, projetosGanhaCount } = impact
+      const hasImpact = entregasCount > 0 || atividadesCount > 0 || projetosPerdeCount > 0 || projetosGanhaCount > 0
+      
+      const impactoMsg = hasImpact
+        ? `\n\nImpacto:\n- Perderá acesso a ${projetosPerdeCount} projetos como setor líder\n- Será removido como responsável de ${entregasCount} entregas (setor incompatível)\n- Será removido como responsável de ${atividadesCount} atividades (setor incompatível)\n- Ganhará acesso a ${projetosGanhaCount} projetos pelo novo setor\n\nOs vínculos incompatíveis serão removidos automaticamente. Confirma?`
+        : '\n\nNenhum impacto identificado em projetos ou entregas. Confirma?'
 
-    if (oldSetorId) {
-      // Entregas where user is responsavel and setor matches old setor
-      const { count: ec } = await supabase.from('entregas')
-        .select('id', { count: 'exact', head: true })
-        .eq('responsavel_entrega_id', userId)
-        .eq('orgao_responsavel_setor_id', oldSetorId)
-      entregasCount = ec || 0
+      if (!confirm(`Trocar setor de ${user.nome || 'usuário'} de ${oldSetorCodigo} para ${newSetorCodigo}?${impactoMsg}`)) return
 
-      // Atividades where user is responsavel and entrega's participant sectors don't include new setor
-      // We get atividades where user is responsible, then check entrega compatibility
-      const { data: atividades } = await supabase.from('atividades')
-        .select('id, entrega_id')
-        .eq('responsavel_atividade_id', userId)
-      if (atividades && atividades.length > 0 && newSetorId) {
-        const entregaIds = Array.from(new Set(atividades.map((a: any) => a.entrega_id)))
-        const { data: participantes } = await supabase.from('entrega_participantes')
-          .select('entrega_id')
-          .in('entrega_id', entregaIds)
-          .eq('setor_id', newSetorId)
-        const entregasComNovoSetor = new Set((participantes || []).map((p: any) => p.entrega_id))
-        atividadesCount = atividades.filter((a: any) => !entregasComNovoSetor.has(a.entrega_id)).length
-      } else if (atividades && !newSetorId) {
-        atividadesCount = atividades.length
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_user_setor', payload: { userId, setorId } })
+      })
+
+      if (res.ok) {
+        setUsers(prev => prev.map(u => u.id === userId ? { ...u, setor_id: setorId } : u))
+      } else {
+        const error = await res.json()
+        alert(`Erro: ${error.error}`)
       }
-
-      // Projects where setor_lider_id = old setor (will lose access)
-      const { count: plc } = await supabase.from('projetos')
-        .select('id', { count: 'exact', head: true })
-        .eq('setor_lider_id', oldSetorId)
-      projetosPerdeCount = plc || 0
+    } catch (err) {
+      console.error(err)
+      alert('Erro ao verificar impacto ou salvar alteração.')
     }
-
-    if (newSetorId) {
-      // Projects where setor_lider_id = new setor (will gain access)
-      const { count: pgc } = await supabase.from('projetos')
-        .select('id', { count: 'exact', head: true })
-        .eq('setor_lider_id', newSetorId)
-      projetosGanhaCount = pgc || 0
-    }
-
-    const hasImpact = entregasCount > 0 || atividadesCount > 0 || projetosPerdeCount > 0 || projetosGanhaCount > 0
-    const impactoMsg = hasImpact
-      ? `\n\nImpacto:\n- Perderá acesso a ${projetosPerdeCount} projetos como setor líder\n- Será removido como responsável de ${entregasCount} entregas (setor incompatível)\n- Será removido como responsável de ${atividadesCount} atividades (setor incompatível)\n- Ganhará acesso a ${projetosGanhaCount} projetos pelo novo setor\n\nOs vínculos incompatíveis serão removidos automaticamente. Confirma?`
-      : '\n\nNenhum impacto identificado em projetos ou entregas. Confirma?'
-
-    if (!confirm(`Trocar setor de ${user.nome || 'usuário'} de ${oldSetorCodigo} para ${newSetorCodigo}?${impactoMsg}`)) return
-
-    // 1. Update profile setor
-    const { error } = await supabase.from('profiles').update({ setor_id: newSetorId }).eq('id', userId)
-    if (error) { alert(`Erro: ${error.message}`); return }
-
-    // 2. SET NULL entregas.responsavel_entrega_id where incompatible
-    if (oldSetorId && entregasCount > 0) {
-      await supabase.from('entregas')
-        .update({ responsavel_entrega_id: null })
-        .eq('responsavel_entrega_id', userId)
-        .eq('orgao_responsavel_setor_id', oldSetorId)
-    }
-
-    // 3. SET NULL atividades.responsavel_atividade_id where entrega sectors don't include new setor
-    if (atividadesCount > 0) {
-      const { data: atividades } = await supabase.from('atividades')
-        .select('id, entrega_id')
-        .eq('responsavel_atividade_id', userId)
-      if (atividades && atividades.length > 0) {
-        let atividadesParaRemover: string[] = []
-        if (newSetorId) {
-          const entregaIds = Array.from(new Set(atividades.map((a: any) => a.entrega_id)))
-          const { data: participantes } = await supabase.from('entrega_participantes')
-            .select('entrega_id')
-            .in('entrega_id', entregaIds)
-            .eq('setor_id', newSetorId)
-          const entregasComNovoSetor = new Set((participantes || []).map((p: any) => p.entrega_id))
-          atividadesParaRemover = atividades.filter((a: any) => !entregasComNovoSetor.has(a.entrega_id)).map((a: any) => a.id)
-        } else {
-          atividadesParaRemover = atividades.map((a: any) => a.id)
-        }
-        if (atividadesParaRemover.length > 0) {
-          await supabase.from('atividades')
-            .update({ responsavel_atividade_id: null })
-            .in('id', atividadesParaRemover)
-        }
-      }
-    }
-
-    // 4. Update atividade_participantes setor_id for active atividades
-    if (newSetorId) {
-      const { data: activeAtividades } = await supabase.from('atividades')
-        .select('id')
-        .not('status', 'in', '("resolvida","cancelada")')
-      if (activeAtividades && activeAtividades.length > 0) {
-        const activeIds = activeAtividades.map((a: any) => a.id)
-        await supabase.from('atividade_participantes')
-          .update({ setor_id: newSetorId })
-          .eq('user_id', userId)
-          .eq('tipo_participante', 'usuario')
-          .in('atividade_id', activeIds)
-      }
-    }
-
-    // 5. Audit log
-    await supabase.from('audit_log').insert({
-      usuario_id: profile?.id,
-      usuario_nome: profile?.nome,
-      tipo_acao: 'update',
-      entidade: 'profile',
-      entidade_id: userId,
-      conteudo_anterior: JSON.stringify({ setor_id: oldSetorId }),
-      conteudo_novo: JSON.stringify({ setor_id: newSetorId }),
-      descricao: `Setor alterado de ${oldSetorCodigo} para ${newSetorCodigo}`
-    })
-
-    // Refresh users list
-    const { data } = await supabase.from('profiles').select('*, setores:setor_id(codigo, nome_completo)').order('nome')
-    if (data) setUsers(data)
   }
 
   async function saveNome(userId: string) {
@@ -1355,48 +1394,34 @@ function ConfiguracoesAdmin({ isMaster = false }: { isMaster?: boolean }) {
   const [configs, setConfigs] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState<string | null>(null)
   const [saved, setSaved] = useState<string | null>(null)
-  const supabase = createClient()
 
   useEffect(() => {
-    supabase.from('configuracoes').select('chave, valor')
-      .then(({ data }) => {
-        if (data) {
-          const map: Record<string, string> = {}
-          data.forEach((c: any) => { map[c.chave] = c.valor })
-          setConfigs(map)
-        }
-      })
+    fetch('/api/admin?type=config').then(res => res.json()).then(data => {
+      if (Array.isArray(data)) {
+        const map: Record<string, string> = {}
+        data.forEach((c: any) => { map[c.chave] = c.valor })
+        setConfigs(map)
+      }
+    })
   }, [])
 
   async function toggle(chave: string) {
     const novoValor = configs[chave] === 'true' ? 'false' : 'true'
     setSaving(chave)
 
-    const { data: { user } } = await supabase.auth.getUser()
-    const { data: updated, error } = await supabase.from('configuracoes')
-      .update({ valor: novoValor, atualizado_por: user?.id })
-      .eq('chave', chave)
-      .select()
+    const res = await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'save_config', payload: { chave, valor: novoValor } })
+    })
 
-    if (error) {
-      alert(`Erro: ${error.message}`)
-    } else if (!updated || updated.length === 0) {
-      // Chave não existe no banco — tenta inserir
-      const { error: insErr } = await supabase.from('configuracoes')
-        .insert({ chave, valor: novoValor, atualizado_por: user?.id })
-      if (insErr) {
-        // Se INSERT falhar por RLS, rodar no Supabase SQL Editor:
-        // CREATE POLICY "config_insert_admin" ON configuracoes FOR INSERT TO authenticated WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin','master')));
-        alert('Não foi possível salvar. Execute a migração "participantes_rls_e_config_aprovacao" no banco de dados.')
-      } else {
-        setConfigs(prev => ({ ...prev, [chave]: novoValor }))
-        setSaved(chave)
-        setTimeout(() => setSaved(null), 2000)
-      }
-    } else {
+    if (res.ok) {
       setConfigs(prev => ({ ...prev, [chave]: novoValor }))
       setSaved(chave)
       setTimeout(() => setSaved(null), 2000)
+    } else {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
     }
     setSaving(null)
   }
@@ -1593,17 +1618,17 @@ function SetoresAdmin() {
   const [transferToId, setTransferToId] = useState<string>('')
   const [checkingDeps, setCheckingDeps] = useState(false)
 
-  const supabase = createClient()
-
   useEffect(() => { loadSetores() }, [])
 
   async function loadSetores() {
     setLoading(true)
-    const { data } = await supabase.from('setores').select('*').order('codigo')
-    if (data) {
+    const res = await fetch('/api/admin?type=setores')
+    const data = await res.json()
+    if (Array.isArray(data)) {
       // Carrega dependências para cada setor
       const withDeps = await Promise.all(data.map(async (s: any) => {
-        const { data: deps } = await supabase.rpc('check_setor_dependencies', { p_setor_id: s.id })
+        const depRes = await fetch(`/api/admin?type=setores_deps&id=${s.id}`)
+        const deps = await depRes.json()
         return { ...s, _deps: deps }
       }))
       setSetores(withDeps)
@@ -1640,36 +1665,24 @@ function SetoresAdmin() {
 
     setSaving(true)
 
-    if (editingId) {
-      // Edição
-      const { error } = await supabase.from('setores')
-        .update({ codigo: formCodigo.trim().toUpperCase(), nome_completo: formNome.trim() })
-        .eq('id', editingId)
+    const res = await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'save_setor',
+        payload: { id: editingId, codigo: formCodigo.trim().toUpperCase(), nome_completo: formNome.trim() }
+      })
+    })
 
-      if (error) {
-        alert(`Erro ao salvar: ${error.message}`)
-        setSaving(false)
-        return
-      }
+    if (res.ok) {
+      setSaving(false)
+      cancelForm()
+      loadSetores()
     } else {
-      // Criação
-      const { error } = await supabase.from('setores')
-        .insert({ codigo: formCodigo.trim().toUpperCase(), nome_completo: formNome.trim() })
-
-      if (error) {
-        if (error.message.includes('unique') || error.message.includes('duplicate')) {
-          alert('Já existe um setor com esse código.')
-        } else {
-          alert(`Erro ao criar: ${error.message}`)
-        }
-        setSaving(false)
-        return
-      }
+      const error = await res.json()
+      alert(`Erro ao salvar: ${error.error}`)
+      setSaving(false)
     }
-
-    setSaving(false)
-    cancelForm()
-    loadSetores()
   }
 
   async function startDelete(s: SetorRow) {
@@ -1688,26 +1701,24 @@ function SetoresAdmin() {
 
     setSaving(true)
 
-    const { data, error } = await supabase.rpc('admin_delete_setor', {
-      p_setor_id: deleteTarget.id,
-      p_transfer_to_id: deps && deps.total > 0 ? parseInt(transferToId) : null
+    const res = await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'delete_setor',
+        payload: { id: deleteTarget.id, transferToId: transferToId ? parseInt(transferToId) : null }
+      })
     })
 
-    if (error) {
-      alert(`Erro ao excluir: ${error.message}`)
+    if (res.ok) {
       setSaving(false)
-      return
-    }
-
-    if (data && !data.success) {
-      alert('Não foi possível excluir. Verifique as dependências.')
+      setDeleteTarget(null)
+      loadSetores()
+    } else {
+      const error = await res.json()
+      alert(`Erro ao excluir: ${error.error}`)
       setSaving(false)
-      return
     }
-
-    setSaving(false)
-    setDeleteTarget(null)
-    loadSetores()
   }
 
   const depLabels: Record<string, string> = {
@@ -1904,150 +1915,38 @@ function SolicitacoesAdmin() {
   const [loading, setLoading] = useState(true)
   const [filterStatus, setFilterStatus] = useState('em_analise')
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  const [justificativa, setJustificativa] = useState('')
-  const [processing, setProcessing] = useState(false)
-  const [dadosAtuais, setDadosAtuais] = useState<Record<string, any>>({})
-  const supabase = createClient()
+  const [processing, setProcessing] = useState<number | null>(null)
+  const [resposta, setResposta] = useState<Record<number, string>>({})
 
-  useEffect(() => { loadSolicitacoes() }, [filterStatus])
+  useEffect(() => { loadSols() }, [filterStatus])
 
-  async function loadSolicitacoes() {
+  async function loadSols() {
     setLoading(true)
-    let query = supabase.from('solicitacoes_alteracao')
-      .select('*, projeto:projeto_id(nome)')
-      .order('created_at', { ascending: false })
-    if (filterStatus) query = query.eq('status', filterStatus)
-    const { data } = await query
-    if (data) {
+    const res = await fetch(`/api/admin?type=solicitacoes&status=${filterStatus}`)
+    if (res.ok) {
+      const data = await res.json()
       setSolicitacoes(data)
-      // Carregar dados atuais das entidades para comparação (apenas em_analise com edição)
-      const pendentes = data.filter(s => s.status === 'em_analise' && s.tipo_operacao === 'edicao')
-      const atuais: Record<string, any> = {}
-      for (const s of pendentes) {
-        const table = s.tipo_entidade === 'projeto' ? 'projetos' : s.tipo_entidade === 'entrega' ? 'entregas' : 'atividades'
-        const { data: atual } = await supabase.from(table).select('*').eq('id', s.entidade_id).single()
-        if (atual) atuais[`${s.tipo_entidade}_${s.entidade_id}`] = atual
-      }
-      setDadosAtuais(atuais)
     }
     setLoading(false)
   }
 
-  async function avaliar(sol: any, status: 'deferida' | 'indeferida') {
-    setProcessing(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setProcessing(false); return }
-    const { data: profile } = await supabase.from('profiles').select('nome').eq('id', user.id).single()
-
-    // Atualizar status da solicitação
-    const { error: updateErr } = await supabase.from('solicitacoes_alteracao').update({
-      status,
-      avaliador_id: user.id,
-      avaliador_nome: profile?.nome || '',
-      justificativa_avaliador: justificativa.trim() || null,
-      avaliado_em: new Date().toISOString(),
-    }).eq('id', sol.id)
-
-    if (updateErr) { alert(`Erro: ${updateErr.message}`); setProcessing(false); return }
-
-    // Se deferida, aplicar as alterações
-    if (status === 'deferida') {
-      const ok = await aplicarAlteracao(sol, user.id, profile?.nome || '')
-      if (!ok) {
-        // Reverter status se falhou
-        await supabase.from('solicitacoes_alteracao').update({ status: 'em_analise', avaliador_id: null, avaliador_nome: null, justificativa_avaliador: null, avaliado_em: null }).eq('id', sol.id)
-        setProcessing(false); return
-      }
+  async function avaliar(id: number, status: string) {
+    setProcessing(id)
+    const res = await fetch('/api/admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'process_solicitacao',
+        payload: { id, status, resposta_gestor: resposta[id] || null }
+      })
+    })
+    if (!res.ok) {
+      const error = await res.json()
+      alert(`Erro: ${error.error}`)
     }
-
+    setProcessing(null)
     setExpandedId(null)
-    setJustificativa('')
-    setProcessing(false)
-    loadSolicitacoes()
-    window.dispatchEvent(new Event('solicitacao-updated'))
-  }
-
-  async function aplicarAlteracao(sol: any, avaliadorId: string, avaliadorNome: string) {
-    const dados = sol.dados_alteracao
-
-    if (sol.tipo_operacao === 'exclusao') {
-      const table = sol.tipo_entidade === 'projeto' ? 'projetos' : sol.tipo_entidade === 'entrega' ? 'entregas' : 'atividades'
-      // Audit log
-      await supabase.from('audit_log').insert({
-        usuario_id: avaliadorId, usuario_nome: avaliadorNome,
-        tipo_acao: 'delete', entidade: sol.tipo_entidade, entidade_id: sol.entidade_id,
-        conteudo_anterior: { nome: sol.entidade_nome, solicitante: sol.solicitante_nome }, conteudo_novo: null
-      })
-      const { error } = await supabase.from(table).delete().eq('id', sol.entidade_id)
-      if (error) { alert(`Erro ao excluir: ${error.message}`); return false }
-      return true
-    }
-
-    // Edição — buscar dados atuais antes de aplicar para registrar no audit_log
-    if (sol.tipo_entidade === 'projeto' && dados) {
-      const { data: atual } = await supabase.from('projetos').select('nome, descricao, problema_resolve, responsavel, indicador_sucesso, tipo_acao, setor_lider_id').eq('id', sol.entidade_id).single()
-      const { acoes, ...projetoData } = dados
-      const { error } = await supabase.from('projetos').update(projetoData).eq('id', sol.entidade_id)
-      if (error) { alert(`Erro ao atualizar projeto: ${error.message}`); return false }
-      if (acoes) {
-        await supabase.from('projeto_acoes').delete().eq('projeto_id', sol.entidade_id)
-        if (acoes.length > 0) {
-          await supabase.from('projeto_acoes').insert(
-            acoes.map((aid: number) => ({ projeto_id: sol.entidade_id, acao_estrategica_id: aid }))
-          )
-        }
-      }
-      await supabase.from('audit_log').insert({
-        usuario_id: avaliadorId, usuario_nome: avaliadorNome,
-        tipo_acao: 'update', entidade: 'projeto', entidade_id: sol.entidade_id,
-        conteudo_anterior: { ...atual, solicitante: sol.solicitante_nome }, conteudo_novo: projetoData
-      })
-      return true
-    }
-
-    if (sol.tipo_entidade === 'entrega' && dados) {
-      const { data: atual } = await supabase.from('entregas').select('nome, descricao, criterios_aceite, dependencias_criticas, data_final_prevista, status, motivo_status').eq('id', sol.entidade_id).single()
-      const { participantes, ...entregaData } = dados
-      const { error } = await supabase.from('entregas').update(entregaData).eq('id', sol.entidade_id)
-      if (error) { alert(`Erro ao atualizar entrega: ${error.message}`); return false }
-      if (participantes) {
-        await supabase.from('entrega_participantes').delete().eq('entrega_id', sol.entidade_id)
-        if (participantes.length > 0) {
-          await supabase.from('entrega_participantes').insert(
-            participantes.map((p: any) => ({ entrega_id: sol.entidade_id, ...p }))
-          )
-        }
-      }
-      await supabase.from('audit_log').insert({
-        usuario_id: avaliadorId, usuario_nome: avaliadorNome,
-        tipo_acao: 'update', entidade: 'entrega', entidade_id: sol.entidade_id,
-        conteudo_anterior: { ...atual, solicitante: sol.solicitante_nome }, conteudo_novo: entregaData
-      })
-      return true
-    }
-
-    if (sol.tipo_entidade === 'atividade' && dados) {
-      const { data: atual } = await supabase.from('atividades').select('nome, descricao, data_prevista, status, motivo_status').eq('id', sol.entidade_id).single()
-      const { participantes, ...atividadeData } = dados
-      const { error } = await supabase.from('atividades').update(atividadeData).eq('id', sol.entidade_id)
-      if (error) { alert(`Erro ao atualizar atividade: ${error.message}`); return false }
-      if (participantes) {
-        await supabase.from('atividade_participantes').delete().eq('atividade_id', sol.entidade_id)
-        if (participantes.length > 0) {
-          await supabase.from('atividade_participantes').insert(
-            participantes.map((p: any) => ({ atividade_id: sol.entidade_id, ...p }))
-          )
-        }
-      }
-      await supabase.from('audit_log').insert({
-        usuario_id: avaliadorId, usuario_nome: avaliadorNome,
-        tipo_acao: 'update', entidade: 'atividade', entidade_id: sol.entidade_id,
-        conteudo_anterior: { ...atual, solicitante: sol.solicitante_nome }, conteudo_novo: atividadeData
-      })
-      return true
-    }
-
-    return true
+    loadSols()
   }
 
   function formatDate(iso: string) {
@@ -2060,43 +1959,6 @@ function SolicitacoesAdmin() {
     deferida: { label: 'Aprovada', color: 'bg-green-100 text-green-700' },
     indeferida: { label: 'Recusada', color: 'bg-red-100 text-red-700' },
     cancelada: { label: 'Cancelada', color: 'bg-gray-100 text-gray-600' },
-  }
-
-  const FIELD_LABELS: Record<string, string> = {
-    nome: 'Nome', descricao: 'Descrição', problema_resolve: 'Problema que resolve',
-    responsavel: 'Responsável', indicador_sucesso: 'Indicador de sucesso',
-    tipo_acao: 'Tipo de ação', setor_lider_id: 'Setor líder',
-    criterios_aceite: 'Critérios de aceite', dependencias_criticas: 'Dependências críticas',
-    data_final_prevista: 'Quinzena', status: 'Status', motivo_status: 'Motivo do status',
-    data_prevista: 'Data prevista',
-  }
-
-  function renderDados(dados: any, atual: any) {
-    if (!dados) return <span className="text-gray-300">—</span>
-    const entries = Object.entries(dados)
-    return (
-      <div className="text-xs space-y-1.5 mt-1">
-        {entries.map(([k, v]) => {
-          if (k === 'participantes' || k === 'acoes') return null
-          const valNovo = Array.isArray(v) ? (v as any[]).join(', ') : String(v ?? '—')
-          const valAtual = atual ? (Array.isArray(atual[k]) ? (atual[k] as any[]).join(', ') : String(atual[k] ?? '—')) : null
-          const changed = atual && valNovo !== valAtual
-          return (
-            <div key={k} className={`rounded px-2 py-1 ${changed ? 'bg-amber-50 border border-amber-200' : ''}`}>
-              <span className="font-medium text-gray-500">{FIELD_LABELS[k] || k}:</span>{' '}
-              {changed ? (
-                <>
-                  <span className="line-through text-red-400 mr-1">{valAtual!.substring(0, 80)}</span>
-                  <span className="text-green-700 font-medium">{valNovo.substring(0, 100)}</span>
-                </>
-              ) : (
-                <span className="text-gray-600">{valNovo.substring(0, 100)}{valNovo.length > 100 ? '...' : ''}</span>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    )
   }
 
   return (
@@ -2122,7 +1984,7 @@ function SolicitacoesAdmin() {
             const isExpanded = expandedId === sol.id
             return (
               <div key={sol.id} className={`bg-white rounded-xl border overflow-hidden ${sol.status === 'em_analise' ? 'border-amber-300' : 'border-gray-200'}`}>
-                <div className="p-4 cursor-pointer hover:bg-gray-50" onClick={() => { setExpandedId(isExpanded ? null : sol.id); setJustificativa('') }}>
+                <div className="p-4 cursor-pointer hover:bg-gray-50" onClick={() => { setExpandedId(isExpanded ? null : sol.id) }}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${st.color}`}>{st.label}</span>
@@ -2148,48 +2010,23 @@ function SolicitacoesAdmin() {
                       </div>
                       <div>
                         <span className="text-xs font-medium text-gray-500 block mb-1">Projeto</span>
-                        <span className="text-sm text-gray-700">{sol.projeto?.nome || `#${sol.projeto_id}`}</span>
+                        <span className="text-sm text-gray-700">{sol.projeto_nome || `#${sol.projeto_id}`}</span>
                       </div>
                     </div>
-
-                    {sol.tipo_operacao === 'edicao' && sol.dados_alteracao && (
-                      <div className="mb-4">
-                        <span className="text-xs font-medium text-gray-500 block mb-1">Dados da alteração solicitada</span>
-                        <div className="bg-white rounded-lg border border-gray-200 p-3">
-                          {renderDados(sol.dados_alteracao, dadosAtuais[`${sol.tipo_entidade}_${sol.entidade_id}`])}
-                          {sol.dados_alteracao.participantes && (
-                            <div className="mt-1 text-[10px] text-gray-500">
-                              <span className="font-medium text-gray-600">participantes:</span> {sol.dados_alteracao.participantes.length} participante(s)
-                            </div>
-                          )}
-                          {sol.dados_alteracao.acoes && (
-                            <div className="mt-1 text-[10px] text-gray-500">
-                              <span className="font-medium text-gray-600">ações vinculadas:</span> {sol.dados_alteracao.acoes.length} ação(ões)
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {sol.tipo_operacao === 'exclusao' && (
-                      <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
-                        <span className="text-xs font-medium text-red-600">Solicita a exclusão permanente desta entidade e todos os seus dependentes.</span>
-                      </div>
-                    )}
 
                     {sol.status === 'em_analise' && (
                       <div className="space-y-3">
                         <div>
-                          <label className="text-xs font-medium text-gray-500 block mb-1">Justificativa (opcional)</label>
-                          <input type="text" value={justificativa} onChange={e => setJustificativa(e.target.value)}
+                          <label className="text-xs font-medium text-gray-500 block mb-1">Resposta do Gestor (opcional)</label>
+                          <input type="text" value={resposta[sol.id] || ''} onChange={e => setResposta(prev => ({ ...prev, [sol.id]: e.target.value }))}
                             placeholder="Motivo da decisão" className="input-field text-xs w-full" />
                         </div>
                         <div className="flex gap-2">
-                          <button onClick={() => avaliar(sol, 'deferida')} disabled={processing}
+                          <button onClick={() => avaliar(sol.id, 'deferida')} disabled={processing === sol.id}
                             className="flex items-center gap-1 text-xs bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 disabled:opacity-50">
                             <Check size={14} /> Aprovar e aplicar
                           </button>
-                          <button onClick={() => avaliar(sol, 'indeferida')} disabled={processing}
+                          <button onClick={() => avaliar(sol.id, 'indeferida')} disabled={processing === sol.id}
                             className="flex items-center gap-1 text-xs bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 disabled:opacity-50">
                             <X size={14} /> Recusar
                           </button>
@@ -2199,8 +2036,8 @@ function SolicitacoesAdmin() {
 
                     {sol.status !== 'em_analise' && sol.avaliador_nome && (
                       <div className="text-xs text-gray-500">
-                        <span className="font-medium">Avaliado por:</span> {sol.avaliador_nome} em {formatDate(sol.avaliado_em)}
-                        {sol.justificativa_avaliador && <span className="ml-2 italic">— {sol.justificativa_avaliador}</span>}
+                        <span className="font-medium">Avaliado por:</span> {sol.avaliador_nome} em {formatDate(sol.analisado_em || sol.created_at)}
+                        {sol.resposta_gestor && <span className="ml-2 italic">— {sol.resposta_gestor}</span>}
                       </div>
                     )}
                   </div>
@@ -2221,21 +2058,19 @@ function AuditLogAdmin() {
   const [filterTipo, setFilterTipo] = useState('')
   const [page, setPage] = useState(0)
   const PAGE_SIZE = 30
-  const supabase = createClient()
-
   useEffect(() => { loadLogs() }, [filterEntidade, filterTipo, page])
 
   async function loadLogs() {
     setLoading(true)
-    let query = supabase.from('audit_log').select('*')
-      .order('created_at', { ascending: false })
-      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
-
-    if (filterEntidade) query = query.eq('entidade', filterEntidade)
-    if (filterTipo) query = query.eq('tipo_acao', filterTipo)
-
-    const { data } = await query
-    if (data) setLogs(data)
+    const params = new URLSearchParams({ type: 'audit_log' })
+    if (filterEntidade) params.append('entidade', filterEntidade)
+    if (filterTipo) params.append('tipo', filterTipo)
+    
+    const res = await fetch(`/api/admin?${params.toString()}`)
+    if (res.ok) {
+      const data = await res.json()
+      setLogs(data)
+    }
     setLoading(false)
   }
 

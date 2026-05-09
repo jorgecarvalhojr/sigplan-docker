@@ -7,13 +7,20 @@ next-env.d.ts
 *.tsbuildinfo
 
 # Variáveis de ambiente
+.env
 .env.local
+.env.development
+.env.test
+.env.production
+!.env.template
+!.env.local.example
 
 # Supabase
 supabase/.temp
 
 # Claude Code
 .claude/
+scratch/
 
 # Dumps e scripts SQL locais
 *.sql

@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import { Filter, X, ExternalLink, ChevronRight, ChevronDown, BarChart3, Loader2 } from 'lucide-react'
 import type { Profile } from '@/lib/types'
@@ -42,7 +41,6 @@ function fmtShort(d: Date) {
 /* ───────────────────── Componente principal ───────────────────── */
 export default function PainelGanttPage() {
   const router = useRouter()
-  const supabase = createClient()
 
   /* Estado principal */
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -65,53 +63,30 @@ export default function PainelGanttPage() {
   /* ─── Carregamento de dados ─── */
   useEffect(() => {
     async function loadAll() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
-
-      const [profileRes, setoresRes, projetosRes] = await Promise.all([
-        supabase.from('profiles').select('*, setores:setor_id(id, codigo, nome_completo)').eq('id', user.id).single(),
-        supabase.from('setores').select('id, codigo, nome_completo').order('codigo'),
-        supabase.from('projetos').select(`
-          id, nome, descricao, problema_resolve, data_inicio,
-          responsavel_id, setor_lider_id,
-          setor_lider:setor_lider_id(id, codigo, nome_completo),
-          responsavel:responsavel_id(id, nome, setor_id),
-          projeto_acoes(acao_estrategica:acao_estrategica_id(numero, nome)),
-          entregas(
-            id, nome, descricao, criterios_aceite, dependencias_criticas,
-            data_inicio, data_final_prevista, status, motivo_status,
-            orgao_responsavel_setor_id, responsavel_entrega_id,
-            responsavel_entrega:responsavel_entrega_id(id, nome),
-            entrega_participantes(id, setor_id, tipo_participante, papel,
-              setor:setor_id(id, codigo, nome_completo)),
-            atividades(
-              id, nome, descricao, data_prevista, status, motivo_status,
-              responsavel_atividade_id,
-              responsavel_atividade:responsavel_atividade_id(id, nome),
-              atividade_participantes(id, user_id, setor_id, tipo_participante, papel,
-                setor:setor_id(id, codigo, nome_completo))
-            )
-          )
-        `).order('nome')
-      ])
-
-      const p = profileRes.data as any
-      if (p) {
-        setProfile(p)
-        // Visualização sem limitação de filtro — todos começam sem filtro
+      const sessionRes = await fetch('/api/auth/session')
+      if (sessionRes.ok) {
+        const session = await sessionRes.json()
+        if (session.user) {
+          setProfile(session.user as any)
+        } else {
+          router.push('/login'); return
+        }
+      } else {
+        router.push('/login'); return
       }
-      if (setoresRes.data) setSetores(setoresRes.data)
-      // Load eligible users for filter
-      const { data: usersData } = await supabase.from('profiles')
-        .select('id, nome, setor_id, setores:setor_id(codigo)')
-        .not('role', 'eq', 'solicitante')
-        .eq('ativo', true)
-        .order('nome')
-      if (usersData) setEligibleUsers(usersData.map((u: any) => ({
+
+      // Dados via PostgreSQL Docker
+      const res = await fetch('/api/dados/gantt')
+      if (!res.ok) { setLoading(false); return }
+      const data = await res.json()
+
+      if (data.profile) setProfile(data.profile)
+      if (data.setores) setSetores(data.setores)
+      if (data.usuarios) setEligibleUsers(data.usuarios.map((u: any) => ({
         id: u.id, nome: u.nome,
-        setor_id: u.setor_id, setor_codigo: u.setores?.codigo || null
+        setor_id: u.setor_id, setor_codigo: u.setores?.codigo || null,
       })))
-      if (projetosRes.data) setProjetos(projetosRes.data)
+      if (data.projetos) setProjetos(data.projetos)
       setLoading(false)
     }
     loadAll()

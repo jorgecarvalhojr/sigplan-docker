@@ -1,10 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient } from '@/lib/supabase'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, User, Lock, Eye, EyeOff, Check, X, AlertTriangle } from 'lucide-react'
-import { PASSWORD_RULES, validatePassword } from '@/lib/password-validation'
 
 export default function PerfilPage() {
   const [profile, setProfile] = useState<any>(null)
@@ -12,36 +10,21 @@ export default function PerfilPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const forcarSenha = searchParams.get('forcarSenha') === 'true'
-  const supabase = createClient()
 
   // Dados pessoais
   const [nome, setNome] = useState('')
   const [savingNome, setSavingNome] = useState(false)
   const [nomeSaved, setNomeSaved] = useState(false)
 
-  // Troca de senha
-  const [senhaAtual, setSenhaAtual] = useState('')
-  const [novaSenha, setNovaSenha] = useState('')
-  const [confirmarSenha, setConfirmarSenha] = useState('')
-  const [showSenhaAtual, setShowSenhaAtual] = useState(false)
-  const [showNovaSenha, setShowNovaSenha] = useState(false)
-  const [showConfirmar, setShowConfirmar] = useState(false)
-  const [savingSenha, setSavingSenha] = useState(false)
-  const [senhaError, setSenhaError] = useState('')
-  const [senhaSuccess, setSenhaSuccess] = useState('')
-
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); return }
+      const res = await fetch('/api/auth/session')
+      if (!res.ok) { router.push('/login'); return }
 
-      const { data } = await supabase
-        .from('profiles')
-        .select('*, setores:setor_id(codigo, nome_completo)')
-        .eq('id', user.id)
-        .single()
-
-      if (data) {
+      // Dados do perfil via PostgreSQL Docker
+      const profileRes = await fetch('/api/dados/perfil')
+      if (profileRes.ok) {
+        const data = await profileRes.json()
         setProfile(data)
         setNome(data.nome)
       }
@@ -53,10 +36,15 @@ export default function PerfilPage() {
   async function handleSaveNome() {
     if (!profile || !nome.trim()) return
     setSavingNome(true)
-    const { error } = await supabase
-      .from('profiles').update({ nome: nome.trim() }).eq('id', profile.id)
-    if (error) {
-      alert(`Erro: ${error.message}`)
+    // Dados via PostgreSQL Docker
+    const res = await fetch('/api/dados/perfil', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome: nome.trim() }),
+    })
+    if (!res.ok) {
+      const err = await res.json()
+      alert(`Erro: ${err.error}`)
     } else {
       setProfile((p: any) => ({ ...p, nome: nome.trim() }))
       setNomeSaved(true)
@@ -66,54 +54,8 @@ export default function PerfilPage() {
   }
 
   async function handleChangeSenha() {
-    setSenhaError('')
-    setSenhaSuccess('')
-
-    const validation = validatePassword(novaSenha)
-    if (!validation.valid) {
-      setSenhaError('A senha não atende aos requisitos.')
-      return
-    }
-
-    if (novaSenha !== confirmarSenha) {
-      setSenhaError('As senhas não coincidem.')
-      return
-    }
-
-    setSavingSenha(true)
-
-    // Se não é modo forçado, verificar senha atual
-    if (!forcarSenha) {
-      const { error: verifyError } = await supabase.auth.signInWithPassword({
-        email: profile.email,
-        password: senhaAtual,
-      })
-      if (verifyError) {
-        setSenhaError('Senha atual incorreta.')
-        setSavingSenha(false)
-        return
-      }
-    }
-
-    const { error } = await supabase.auth.updateUser({ password: novaSenha })
-    if (error) {
-      setSenhaError(error.message)
-    } else {
-      setSenhaSuccess('Senha alterada com sucesso!')
-      setSenhaAtual('')
-      setNovaSenha('')
-      setConfirmarSenha('')
-
-      // Se modo forçado, limpar flag e redirecionar
-      if (forcarSenha) {
-        await supabase.from('profiles').update({ senha_zerada: false }).eq('id', profile.id)
-        setTimeout(() => router.push('/dashboard'), 1500)
-      }
-    }
-    setSavingSenha(false)
+    alert('A alteração de senha deve ser feita através do sistema do CBMERJ.')
   }
-
-  const passwordValidation = validatePassword(novaSenha)
 
   if (loading) {
     return (
@@ -197,96 +139,16 @@ export default function PerfilPage() {
       {/* Alterar Senha */}
       <div className="card p-6">
         <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2 mb-4">
-          <Lock size={18} className="text-sedec-500" /> {forcarSenha ? 'Nova Senha' : 'Alterar Senha'}
+          <Lock size={18} className="text-sedec-500" /> Gestão de Senha
         </h2>
 
-        <div className="space-y-4">
-          {/* Senha atual - oculto no modo forçado */}
-          {!forcarSenha && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Senha atual</label>
-              <div className="relative">
-                <input
-                  type={showSenhaAtual ? 'text' : 'password'}
-                  value={senhaAtual}
-                  onChange={e => setSenhaAtual(e.target.value)}
-                  className="input-field pr-10"
-                  placeholder="Digite sua senha atual"
-                />
-                <button type="button" onClick={() => setShowSenhaAtual(!showSenhaAtual)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                  {showSenhaAtual ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nova senha</label>
-            <div className="relative">
-              <input
-                type={showNovaSenha ? 'text' : 'password'}
-                value={novaSenha}
-                onChange={e => setNovaSenha(e.target.value)}
-                className="input-field pr-10"
-                placeholder="Digite a nova senha"
-              />
-              <button type="button" onClick={() => setShowNovaSenha(!showNovaSenha)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                {showNovaSenha ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-
-            {/* Indicador de requisitos */}
-            {novaSenha.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {PASSWORD_RULES.map((rule, i) => {
-                  const pass = rule.test(novaSenha)
-                  return (
-                    <div key={i} className={`flex items-center gap-1.5 text-xs ${pass ? 'text-green-600' : 'text-gray-400'}`}>
-                      {pass ? <Check size={12} /> : <X size={12} />}
-                      {rule.label}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Confirmar nova senha</label>
-            <div className="relative">
-              <input
-                type={showConfirmar ? 'text' : 'password'}
-                value={confirmarSenha}
-                onChange={e => setConfirmarSenha(e.target.value)}
-                className="input-field pr-10"
-                placeholder="Repita a nova senha"
-              />
-              <button type="button" onClick={() => setShowConfirmar(!showConfirmar)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                {showConfirmar ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-            {confirmarSenha.length > 0 && confirmarSenha !== novaSenha && (
-              <p className="text-xs text-red-500 mt-1">As senhas não coincidem.</p>
-            )}
-          </div>
-
-          {senhaError && (
-            <div className="bg-red-50 text-red-700 text-sm px-4 py-3 rounded-lg">{senhaError}</div>
-          )}
-          {senhaSuccess && (
-            <div className="bg-green-50 text-green-700 text-sm px-4 py-3 rounded-lg">{senhaSuccess}</div>
-          )}
-
-          <button
-            onClick={handleChangeSenha}
-            disabled={savingSenha || !passwordValidation.valid || novaSenha !== confirmarSenha || (!forcarSenha && !senhaAtual)}
-            className="btn-primary w-full disabled:opacity-50"
-          >
-            {savingSenha ? 'Salvando...' : forcarSenha ? 'Definir Senha e Continuar' : 'Alterar Senha'}
-          </button>
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <p className="text-sm text-blue-800">
+            A gestão de autenticação e senhas é realizada centralizadamente pelo sistema do CBMERJ.
+          </p>
+          <p className="text-xs text-blue-600 mt-2">
+            Para alterar sua senha ou recuperar o acesso, utilize o portal oficial do CBMERJ.
+          </p>
         </div>
       </div>
     </div>

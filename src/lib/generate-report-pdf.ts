@@ -1,6 +1,5 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import type { SupabaseClient } from '@supabase/supabase-js'
 
 interface ReportOptions {
   reportName: string
@@ -48,24 +47,17 @@ const WHITE = [255, 255, 255] as const
 
 export async function generateReportPDF(
   projectIds: number[],
-  options: ReportOptions,
-  supabase: SupabaseClient
+  options: ReportOptions
 ): Promise<void> {
-  // Fetch full project data
-  const { data: projetos, error } = await supabase
-    .from('projetos')
-    .select(`*, setor_lider:setor_lider_id(codigo, nome_completo),
-      projeto_acoes(acao_estrategica:acao_estrategica_id(id, numero, nome)),
-      entregas(id, nome, descricao, criterios_aceite, dependencias_criticas, data_inicio, data_final_prevista, status, motivo_status, orgao_responsavel_setor_id, responsavel_entrega_id,
-        entrega_participantes(id, setor_id, tipo_participante, papel, setor:setor_id(codigo, nome_completo)),
-        atividades(id, nome, descricao, data_prevista, status, motivo_status, responsavel_atividade_id,
-          atividade_participantes(id, user_id, setor_id, tipo_participante, papel, user:user_id(id, nome, setor_id), setor:setor_id(codigo, nome_completo))
-        )
-      )`)
-    .in('id', projectIds)
-    .order('nome')
-
-  if (error) throw new Error('Erro ao buscar projetos: ' + error.message)
+  // Fetch full project data via Local API
+  const res = await fetch(`/api/dados/relatorios/projeto-completo?ids=${projectIds.join(',')}`)
+  if (!res.ok) {
+    const errorData = await res.json()
+    throw new Error('Erro ao buscar projetos: ' + (errorData.error || res.statusText))
+  }
+  
+  const { projetos, namesMap } = await res.json()
+  
   if (!projetos || projetos.length === 0) throw new Error('Nenhum projeto encontrado.')
 
   // Ordenar entregas e atividades seguindo o mesmo critério do sistema
@@ -88,49 +80,13 @@ export async function generateReportPDF(
     })
   }
 
-  // Fetch indicadores and riscos if needed
-  let indicadoresMap: Record<number, any[]> = {}
-  let riscosMap: Record<number, any[]> = {}
+  // Fetch indicadores and riscos (already included in the API response)
+  const indicadoresMap: Record<number, any[]> = {}
+  const riscosMap: Record<number, any[]> = {}
 
-  if (options.sections.projeto) {
-    const [indRes, riscRes] = await Promise.all([
-      supabase.from('indicadores').select('*').in('projeto_id', projectIds),
-      supabase.from('riscos').select('*').in('projeto_id', projectIds),
-    ])
-    if (indRes.data) {
-      for (const ind of indRes.data) {
-        if (!indicadoresMap[ind.projeto_id]) indicadoresMap[ind.projeto_id] = []
-        indicadoresMap[ind.projeto_id].push(ind)
-      }
-    }
-    if (riscRes.data) {
-      for (const r of riscRes.data) {
-        if (!riscosMap[r.projeto_id]) riscosMap[r.projeto_id] = []
-        riscosMap[r.projeto_id].push(r)
-      }
-    }
-  }
-
-  // Fetch responsavel names
-  const responsavelIds = new Set<string>()
-  for (const p of projetos) {
-    if (p.responsavel_id) responsavelIds.add(p.responsavel_id)
-    for (const e of (p.entregas || [])) {
-      if (e.responsavel_entrega_id) responsavelIds.add(e.responsavel_entrega_id)
-      for (const a of (e.atividades || [])) {
-        if (a.responsavel_atividade_id) responsavelIds.add(a.responsavel_atividade_id)
-      }
-    }
-  }
-  let namesMap: Record<string, string> = {}
-  if (responsavelIds.size > 0) {
-    const { data: profiles } = await supabase
-      .from('profiles')
-      .select('id, nome')
-      .in('id', Array.from(responsavelIds))
-    if (profiles) {
-      for (const p of profiles) namesMap[p.id] = p.nome
-    }
+  for (const proj of projetos) {
+    if (proj.indicadores) indicadoresMap[proj.id] = proj.indicadores
+    if (proj.riscos) riscosMap[proj.id] = proj.riscos
   }
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })

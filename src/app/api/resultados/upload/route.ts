@@ -1,6 +1,7 @@
+export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
-import { createAdminClient } from '@/lib/supabase-admin'
+import { getSession } from '@/lib/session'
+import sql from '@/lib/db'
 import {
   uploadResultadoPDF,
   RESULTADOS_MAX_BYTES,
@@ -10,21 +11,18 @@ import {
 
 // Permite upload do PDF comprobatório da entrega/atividade.
 // Qualquer usuário autenticado (exceto 'solicitante') pode enviar.
-// A autorização granular (quem pode editar aquela entrega/atividade)
-// é responsabilidade da tela que invoca esta rota — e já é restringida
-// pelo botão de edição lá. Aqui só garantimos autenticação + validação
-// de formato/tamanho + associação correta a uma entidade existente.
 export async function POST(request: NextRequest) {
   try {
-    const serverSupabase = createServerSupabase()
-    const { data: { user } } = await serverSupabase.auth.getUser()
-    if (!user) {
+    const session = await getSession()
+    if (!session?.user) {
       return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
     }
+    const user = session.user
 
-    const admin = createAdminClient()
-    const { data: profile } = await admin
-      .from('profiles').select('role, ativo').eq('id', user.id).single()
+    // Verificar perfil via PostgreSQL Docker
+    const [profile] = await sql`
+      SELECT role, ativo FROM profiles WHERE id = ${user.id} LIMIT 1
+    `
     if (!profile || !profile.ativo || profile.role === 'solicitante') {
       return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
     }
@@ -58,13 +56,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Confirma que a entidade dona existe, evitando subir arquivo para ID aleatório
+    // Confirmar que a entidade existe no PostgreSQL Docker
     const table = ownerKind === 'entrega' ? 'entregas' : 'atividades'
-    const { data: ent } = await admin
-      .from(table)
-      .select('id')
-      .eq('id', ownerId)
-      .single()
+    const [ent] = await sql`
+      SELECT id FROM ${sql(table)} WHERE id = ${ownerId} LIMIT 1
+    `
     if (!ent) {
       return NextResponse.json({ error: 'Entidade não encontrada.' }, { status: 404 })
     }
@@ -84,8 +80,6 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Limite de body do Next (1MB por padrão para actions). Como usamos
-// FormData nativo do fetch, o Next já aceita até 4 MB sem config extra
-// em route handlers.
 export const runtime = 'nodejs'
 export const maxDuration = 30
+

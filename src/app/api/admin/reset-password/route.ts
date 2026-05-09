@@ -1,46 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
-import { createAdminClient } from '@/lib/supabase-admin'
+import { getSession } from '@/lib/session'
+import sql from '@/lib/db'
+
+export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
   try {
-    // Autenticação via cookies (session do usuário)
-    const serverSupabase = createServerSupabase()
-    const { data: { user } } = await serverSupabase.auth.getUser()
-    if (!user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
+    const session = await getSession()
+    if (!session?.user) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 })
+    const user = session.user
 
-    // Verificar que é admin
-    const adminClient = createAdminClient()
-    const { data: callerProfile } = await adminClient
-      .from('profiles').select('role').eq('id', user.id).single()
-    if (!callerProfile || (callerProfile.role !== 'admin' && callerProfile.role !== 'master')) {
+    // Verificar permissão via PostgreSQL Docker
+    const [callerProfile] = await sql`
+      SELECT role FROM profiles WHERE id = ${user.id} LIMIT 1
+    `
+    if (!callerProfile || !['admin', 'master'].includes(callerProfile.role)) {
       return NextResponse.json({ error: 'Sem permissão' }, { status: 403 })
     }
 
     const { userId } = await request.json()
     if (!userId) return NextResponse.json({ error: 'userId obrigatório' }, { status: 400 })
 
-    // Gerar token aleatório como senha temporária
-    const resetToken = crypto.randomUUID()
-
-    // Atualizar senha via função PostgreSQL SECURITY DEFINER
-    // Chamada com session do admin — auth.uid() retorna o ID do admin para check
-    const { error: rpcError } = await serverSupabase.rpc('admin_update_user_password', {
-      target_user_id: userId,
-      new_password: resetToken,
-    })
-    if (rpcError) {
-      return NextResponse.json({ error: rpcError.message }, { status: 500 })
-    }
-
-    // Marcar profile como senha zerada e salvar token
-    const { error: profileError } = await adminClient
-      .from('profiles')
-      .update({ senha_zerada: true, reset_token: resetToken })
-      .eq('id', userId)
-    if (profileError) {
-      return NextResponse.json({ error: profileError.message }, { status: 500 })
-    }
+    // Marcar profile como senha zerada no PostgreSQL Docker
+    await sql`
+      UPDATE profiles
+      SET senha_zerada = true
+      WHERE id = ${userId}
+    `
 
     return NextResponse.json({ success: true })
   } catch {

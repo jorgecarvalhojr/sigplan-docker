@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase'
 import { Bell, BellOff, BellRing } from 'lucide-react'
 
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ''
@@ -22,7 +21,6 @@ type PushState = 'loading' | 'unsupported' | 'denied' | 'subscribed' | 'unsubscr
 export default function PushNotificationManager() {
   const [state, setState] = useState<PushState>('loading')
   const [busy, setBusy] = useState(false)
-  const supabase = createClient()
 
   useEffect(() => {
     checkStatus()
