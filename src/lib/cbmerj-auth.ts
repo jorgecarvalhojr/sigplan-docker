@@ -33,7 +33,8 @@ async function soapRequest(method: string, paramsXml: string) {
       method: 'POST',
       headers,
       body: soapXml,
-      next: { revalidate: 0 }
+      next: { revalidate: 0 },
+      signal: AbortSignal.timeout(8000),
     })
 
     if (!response.ok) return null
@@ -50,8 +51,11 @@ export async function autenticarCbmerj(rg: string, password: string) {
 
   console.log(`📡 1. Tentando Login para RG ${rgFormatado}...`)
 
+  const escapeXml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
+
   // --- PASSO 1: LOGIN (Verifica Senha) ---
-  const loginParams = `<rg>${rgFormatado}</rg><password>${password}</password>`
+  const loginParams = `<rg>${escapeXml(rgFormatado)}</rg><password>${escapeXml(password)}</password>`
   const loginResponse = await soapRequest('login', loginParams)
 
   if (!loginResponse || !loginResponse.toLowerCase().includes('true')) {

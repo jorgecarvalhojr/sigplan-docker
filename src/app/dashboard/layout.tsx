@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { LogOut, Settings, User, FileText, FolderKanban, CalendarDays, BarChart3, Bell, AlertCircle, ChevronDown, ChevronUp, X, BookOpen, MessageSquare, FileBarChart } from 'lucide-react'
 import ManualModal from '@/components/ManualModal'
@@ -21,7 +21,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [alertasExpanded, setAlertasExpanded] = useState(false)
   const [manualOpen, setManualOpen] = useState(false)
   const [manualTooltip, setManualTooltip] = useState(false)
-  
+  const [relatoriosOpen, setRelatoriosOpen] = useState(false)
+  const relatoriosRef = useRef<HTMLDivElement>(null)
+
   const router = useRouter()
   const pathname = usePathname()
 
@@ -64,6 +66,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       window.removeEventListener('solicitacao-updated', onSolicitacaoUpdate)
     }
   }, [pathname])
+
+  // Fechar dropdown de relatórios ao clicar fora
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (relatoriosRef.current && !relatoriosRef.current.contains(e.target as Node)) {
+        setRelatoriosOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   // Tooltip do manual
   useEffect(() => {
@@ -147,10 +160,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <BarChart3 size={14} /> Gantt
               </button>
               {(profile?.role === 'admin' || profile?.role === 'master') && (
-                <button onClick={() => router.push('/dashboard/relatorios')}
-                  className="flex items-center gap-1 px-2 lg:px-3 py-1.5 rounded-md text-xs lg:text-sm text-gray-300 hover:text-white hover:bg-white/10 transition-colors">
-                  <FileBarChart size={14} /> <span className="hidden lg:inline">Relatórios</span><span className="lg:hidden">Relat.</span>
-                </button>
+                <div className="relative" ref={relatoriosRef}>
+                  <button
+                    onClick={() => setRelatoriosOpen(o => !o)}
+                    className="flex items-center gap-1 px-2 lg:px-3 py-1.5 rounded-md text-xs lg:text-sm text-gray-300 hover:text-white hover:bg-white/10 transition-colors">
+                    <FileBarChart size={14} />
+                    <span className="hidden lg:inline">Relatórios</span>
+                    <span className="lg:hidden">Relat.</span>
+                    <ChevronDown size={12} className={`transition-transform ${relatoriosOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {relatoriosOpen && (
+                    <div className="absolute top-full left-0 mt-1 bg-gray-800 border border-gray-700 rounded-md shadow-lg z-50 min-w-[160px]">
+                      <button
+                        onClick={() => { setRelatoriosOpen(false); router.push('/dashboard/relatorios') }}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-xs text-gray-300 hover:text-white hover:bg-white/10 transition-colors rounded-t-md">
+                        <FileBarChart size={12} /> Relatório PDF
+                      </button>
+                      <button
+                        onClick={() => { setRelatoriosOpen(false); router.push('/dashboard/relatorios/tabular') }}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-xs text-gray-300 hover:text-white hover:bg-white/10 transition-colors rounded-b-md">
+                        <FileBarChart size={12} /> Relatório Tabular
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
             </nav>
 
@@ -257,12 +290,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             className="min-w-fit flex items-center justify-center gap-1.5 px-4 py-2 text-xs text-gray-400 hover:text-white hover:bg-white/5 border-l border-gray-700">
             <BarChart3 size={13} /> Gantt
           </button>
-          {(profile?.role === 'admin' || profile?.role === 'master') && (
+          {(profile?.role === 'admin' || profile?.role === 'master') && (<>
             <button onClick={() => router.push('/dashboard/relatorios')}
               className="min-w-fit flex items-center justify-center gap-1.5 px-4 py-2 text-xs text-gray-400 hover:text-white hover:bg-white/5 border-l border-gray-700">
-              <FileBarChart size={13} /> Relatórios
+              <FileBarChart size={13} /> Rel. PDF
             </button>
-          )}
+            <button onClick={() => router.push('/dashboard/relatorios/tabular')}
+              className="min-w-fit flex items-center justify-center gap-1.5 px-4 py-2 text-xs text-gray-400 hover:text-white hover:bg-white/5 border-l border-gray-700">
+              <FileBarChart size={13} /> Rel. Tabular
+            </button>
+          </>)}
         </div>
       </header>
 

@@ -2,8 +2,14 @@ import { SignJWT, jwtVerify } from 'jose'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 
-const secretKey = process.env.SESSION_SECRET || 'secret-muito-seguro-para-jwt-cbmerj'
-const key = new TextEncoder().encode(secretKey)
+function getSecretKey() {
+  const sk = process.env.SESSION_SECRET
+  if (!sk) throw new Error('SESSION_SECRET não definida. Configure a variável de ambiente.')
+  return new TextEncoder().encode(sk)
+}
+
+const isBuild = process.env.NEXT_PHASE === 'phase-production-build'
+const key = isBuild ? new Uint8Array() : getSecretKey()
 
 export type SessionPayload = {
   user: {

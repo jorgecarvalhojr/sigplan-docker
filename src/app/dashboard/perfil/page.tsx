@@ -1,17 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, User, Lock, Eye, EyeOff, Check, X, AlertTriangle } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { ArrowLeft, User } from 'lucide-react'
 
 export default function PerfilPage() {
   const [profile, setProfile] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const forcarSenha = searchParams.get('forcarSenha') === 'true'
 
-  // Dados pessoais
   const [nome, setNome] = useState('')
   const [savingNome, setSavingNome] = useState(false)
   const [nomeSaved, setNomeSaved] = useState(false)
@@ -21,7 +18,6 @@ export default function PerfilPage() {
       const res = await fetch('/api/auth/session')
       if (!res.ok) { router.push('/login'); return }
 
-      // Dados do perfil via PostgreSQL Docker
       const profileRes = await fetch('/api/dados/perfil')
       if (profileRes.ok) {
         const data = await profileRes.json()
@@ -36,7 +32,6 @@ export default function PerfilPage() {
   async function handleSaveNome() {
     if (!profile || !nome.trim()) return
     setSavingNome(true)
-    // Dados via PostgreSQL Docker
     const res = await fetch('/api/dados/perfil', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -53,10 +48,6 @@ export default function PerfilPage() {
     setSavingNome(false)
   }
 
-  async function handleChangeSenha() {
-    alert('A alteração de senha deve ser feita através do sistema do CBMERJ.')
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -67,88 +58,53 @@ export default function PerfilPage() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      {!forcarSenha && (
-        <button onClick={() => router.back()}
-          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4">
-          <ArrowLeft size={16} /> Voltar
-        </button>
-      )}
+      <button onClick={() => router.back()}
+        className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4">
+        <ArrowLeft size={16} /> Voltar
+      </button>
 
-      <h1 className="text-xl font-bold text-gray-800 mb-6">
-        {forcarSenha ? 'Definir Nova Senha' : 'Meu Perfil'}
-      </h1>
+      <h1 className="text-xl font-bold text-gray-800 mb-6">Meu Perfil</h1>
 
-      {forcarSenha && (
-        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 mb-6 flex items-start gap-3">
-          <AlertTriangle size={20} className="text-amber-600 mt-0.5 shrink-0" />
-          <div>
-            <p className="text-sm font-semibold text-amber-800">Senha redefinida pelo administrador</p>
-            <p className="text-xs text-amber-700 mt-1">
-              Sua senha foi zerada. É obrigatório definir uma nova senha antes de continuar usando o sistema.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Dados Pessoais - oculto no modo forçado */}
-      {!forcarSenha && (
-        <div className="card p-6 mb-6">
-          <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2 mb-4">
-            <User size={18} className="text-sedec-500" /> Dados Pessoais
-          </h2>
-
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={nome}
-                  onChange={e => setNome(e.target.value)}
-                  className="input-field flex-1"
-                />
-                <button
-                  onClick={handleSaveNome}
-                  disabled={savingNome || nome.trim() === profile?.nome}
-                  className="btn-primary px-4 py-2 text-sm disabled:opacity-50"
-                >
-                  {savingNome ? 'Salvando...' : 'Salvar'}
-                </button>
-              </div>
-              {nomeSaved && <span className="text-xs text-green-600 mt-1">Salvo!</span>}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input type="text" value={profile?.email || ''} disabled
-                className="input-field bg-gray-50 text-gray-500 cursor-not-allowed" />
-              <p className="text-xs text-gray-400 mt-1">O email só pode ser alterado por um administrador.</p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Setor</label>
-              <input type="text"
-                value={profile?.setores ? `${profile.setores.codigo} — ${profile.setores.nome_completo}` : 'Sem setor'}
-                disabled
-                className="input-field bg-gray-50 text-gray-500 cursor-not-allowed" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Alterar Senha */}
-      <div className="card p-6">
+      <div className="card p-6 mb-6">
         <h2 className="text-base font-semibold text-gray-800 flex items-center gap-2 mb-4">
-          <Lock size={18} className="text-sedec-500" /> Gestão de Senha
+          <User size={18} className="text-sedec-500" /> Dados Pessoais
         </h2>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <p className="text-sm text-blue-800">
-            A gestão de autenticação e senhas é realizada centralizadamente pelo sistema do CBMERJ.
-          </p>
-          <p className="text-xs text-blue-600 mt-2">
-            Para alterar sua senha ou recuperar o acesso, utilize o portal oficial do CBMERJ.
-          </p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={nome}
+                onChange={e => setNome(e.target.value)}
+                className="input-field flex-1"
+              />
+              <button
+                onClick={handleSaveNome}
+                disabled={savingNome || nome.trim() === profile?.nome}
+                className="btn-primary px-4 py-2 text-sm disabled:opacity-50"
+              >
+                {savingNome ? 'Salvando...' : 'Salvar'}
+              </button>
+            </div>
+            {nomeSaved && <span className="text-xs text-green-600 mt-1">Salvo!</span>}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <input type="text" value={profile?.email || ''} disabled
+              className="input-field bg-gray-50 text-gray-500 cursor-not-allowed" />
+            <p className="text-xs text-gray-400 mt-1">O email só pode ser alterado por um administrador.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Setor</label>
+            <input type="text"
+              value={profile?.setores ? `${profile.setores.codigo} — ${profile.setores.nome_completo}` : 'Sem setor'}
+              disabled
+              className="input-field bg-gray-50 text-gray-500 cursor-not-allowed" />
+          </div>
         </div>
       </div>
     </div>

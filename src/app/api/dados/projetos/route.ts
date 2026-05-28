@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
         SELECT
           p.id, p.nome, p.descricao, p.setor_lider_id, p.tipo_acao,
           p.responsavel_id, p.status, p.data_inicio, p.created_at,
-          p.codigo_sequencial,
+          p.codigo_sequencial, p.recorrente,
           s.codigo AS setor_lider_codigo, s.nome_completo AS setor_lider_nome,
           -- Ações estratégicas vinculadas (JSON array)
           COALESCE((

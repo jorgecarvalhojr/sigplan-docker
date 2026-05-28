@@ -37,6 +37,7 @@ interface ProjetoCard {
   tie_atividade: string | null
   tie_entrega_final: string | null
   unread_messages: number
+  recorrente: boolean
 }
 
 const PONT_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; icon: any }> = {
@@ -73,6 +74,7 @@ export default function ProjetosPage() {
   const [tipoAcaoFilter, setTipoAcaoFilter] = useState('')
   const [responsavelFilter, setResponsavelFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState<'ativos' | 'concluidos' | 'hibernando'>('ativos')
+  const [recorrenteFilter, setRecorrenteFilter] = useState<'todos' | 'recorrentes' | 'nao_recorrentes'>('todos')
   const [helpType, setHelpType] = useState<HelpType>(null)
 
   // Reference data
@@ -300,6 +302,7 @@ export default function ProjetosPage() {
           tie_atividade: minAtivData,
           tie_entrega_final: minEntregaFim,
           unread_messages: 0,
+          recorrente: p.recorrente ?? false,
         }
       })
 
@@ -368,9 +371,11 @@ export default function ProjetosPage() {
       } else if (statusFilter === 'hibernando') {
         if (p.status !== 'hibernando') return false
       }
+      if (recorrenteFilter === 'recorrentes' && !p.recorrente) return false
+      if (recorrenteFilter === 'nao_recorrentes' && p.recorrente) return false
       return true
     })
-  }, [projetos, searchText, oeFilter, acaoFilter, setorFilter, tipoAcaoFilter, responsavelFilter, statusFilter])
+  }, [projetos, searchText, oeFilter, acaoFilter, setorFilter, tipoAcaoFilter, responsavelFilter, statusFilter, recorrenteFilter])
 
   const [groupBy, setGroupBy] = useState<'setor' | 'status'>('setor')
   const [viewMode, setViewMode] = useState<'normal' | 'compact'>('compact')
@@ -550,6 +555,15 @@ export default function ProjetosPage() {
               className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium transition-colors ${statusFilter === 'hibernando' ? 'bg-sedec-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
               <Pause size={12} /> Hibernando
             </button>
+          </div>
+          {/* Filtro por recorrência */}
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+            {(['todos', 'recorrentes', 'nao_recorrentes'] as const).map(v => (
+              <button key={v} onClick={() => setRecorrenteFilter(v)}
+                className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${recorrenteFilter === v ? 'bg-purple-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                {v === 'todos' ? 'Todos' : v === 'recorrentes' ? '↻ Recorrentes' : 'Não recorrentes'}
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -814,13 +828,16 @@ export default function ProjetosPage() {
               if (viewMode === 'compact') {
                 return (
                   <button key={p.id} onClick={() => router.push(`/dashboard/projetos/${p.id}`)}
-                    className={`card p-3 text-left group hover:border-orange-300 hover:z-10 hover:shadow-lg transition-all relative ${pont.border} border-l-4 ${isAlerta ? 'ring-2 ring-red-400 ring-offset-1 bg-red-50/40' : isAlertaImpacto ? 'ring-2 ring-amber-400 ring-offset-1 bg-amber-50/40 animate-pulse' : ''}`}>
+                    className={`card p-3 text-left group hover:border-orange-300 hover:z-10 hover:shadow-lg transition-all relative ${pont.border} border-l-4 ${isAlerta ? 'ring-2 ring-red-400 ring-offset-1 bg-red-50/40' : isAlertaImpacto ? 'ring-2 ring-amber-400 ring-offset-1 bg-amber-50/40 animate-pulse' : p.recorrente ? 'ring-1 ring-purple-200' : ''}`}>
                     <div className="flex items-start justify-between gap-1 mb-1">
                       <h3 className="text-xs font-semibold text-gray-800 leading-snug line-clamp-2 group-hover:line-clamp-none">
                         {p.codigo_sequencial != null && (
                           <span className="inline-block mr-1 px-1 py-0.5 rounded bg-orange-100 text-orange-700 text-[9px] font-bold align-middle">
                             SP-{String(p.codigo_sequencial).padStart(4, '0')}
                           </span>
+                        )}
+                        {p.recorrente && (
+                          <span className="inline-flex items-center gap-0.5 mr-1 px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200 text-[9px] font-bold align-middle">↻ Recorrente</span>
                         )}
                         {p.nome}
                       </h3>
@@ -873,7 +890,7 @@ export default function ProjetosPage() {
               // Normal view
               return (
                 <button key={p.id} onClick={() => router.push(`/dashboard/projetos/${p.id}`)}
-                  className={`card p-5 text-left group hover:border-orange-300 transition-colors ${pont.border} border-l-4 ${isAlerta ? 'ring-2 ring-red-400 ring-offset-1 bg-red-50/40' : isAlertaImpacto ? 'ring-2 ring-amber-400 ring-offset-1 bg-amber-50/40 animate-pulse' : ''}`}>
+                  className={`card p-5 text-left group hover:border-orange-300 transition-colors ${pont.border} border-l-4 ${isAlerta ? 'ring-2 ring-red-400 ring-offset-1 bg-red-50/40' : isAlertaImpacto ? 'ring-2 ring-amber-400 ring-offset-1 bg-amber-50/40 animate-pulse' : p.recorrente ? 'ring-1 ring-purple-200' : ''}`}>
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <h3 className="text-sm font-semibold text-gray-800 leading-snug min-h-[2.5rem] line-clamp-2 group-hover:line-clamp-none">
                       {p.codigo_sequencial != null && (
@@ -884,6 +901,11 @@ export default function ProjetosPage() {
                       {p.nome}
                     </h3>
                     <div className="flex flex-col gap-1 shrink-0 items-end">
+                      {p.recorrente && (
+                        <span className="flex items-center gap-0.5 text-[9px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200">
+                          ↻ Recorrente
+                        </span>
+                      )}
                       {isAlerta && (
                         <span className="flex items-center gap-1 text-[9px] font-bold px-2 py-0.5 rounded-full bg-red-500 text-white animate-pulse">
                           <AlertCircle size={10} /> Prazo próximo

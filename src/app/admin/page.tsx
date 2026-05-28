@@ -1088,7 +1088,6 @@ function UsuariosAdmin({ isMaster = false, adminProfile: profile }: { isMaster?:
   const [editNomeValue, setEditNomeValue] = useState('')
   const [editEmailValue, setEditEmailValue] = useState('')
   const [savingUser, setSavingUser] = useState<string | null>(null)
-  const [resetConfirm, setResetConfirm] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
   useEffect(() => {
@@ -1197,22 +1196,6 @@ function UsuariosAdmin({ isMaster = false, adminProfile: profile }: { isMaster?:
     setSavingUser(null)
   }
 
-  async function handleResetPassword(userId: string) {
-    setSavingUser(userId)
-    const res = await fetch('/api/admin/reset-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
-    })
-    if (res.ok) {
-      setUsers(prev => prev.map(u => u.id === userId ? { ...u, senha_zerada: true } : u))
-      setResetConfirm(null)
-    } else {
-      const data = await res.json()
-      alert(`Erro: ${data.error}`)
-    }
-    setSavingUser(null)
-  }
 
   async function handleDeleteUser(userId: string) {
     setSavingUser(userId)
@@ -1333,30 +1316,6 @@ function UsuariosAdmin({ isMaster = false, adminProfile: profile }: { isMaster?:
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-col gap-1.5 items-start">
-                    {(!isMaster || (u.role !== 'admin' && u.role !== 'master')) && (
-                      <div className="flex items-center gap-2">
-                        {u.senha_zerada && (
-                          <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-medium">Senha zerada</span>
-                        )}
-                        {resetConfirm === u.id ? (
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-gray-500">Zerar?</span>
-                            <button onClick={() => handleResetPassword(u.id)} disabled={savingUser === u.id}
-                              className="text-[10px] text-red-600 hover:text-red-800 font-medium">
-                              {savingUser === u.id ? '...' : 'Sim'}
-                            </button>
-                            <button onClick={() => setResetConfirm(null)}
-                              className="text-[10px] text-gray-400 hover:text-gray-600">Não</button>
-                          </div>
-                        ) : (
-                          <button onClick={() => setResetConfirm(u.id)}
-                            className="text-[10px] text-red-500 hover:text-red-700 font-medium whitespace-nowrap">
-                            Zerar Senha
-                          </button>
-                        )}
-                      </div>
-                    )}
-
                     {/* Excluir usuário */}
                     {(!isMaster || (u.role !== 'admin' && u.role !== 'master')) && (deleteConfirm === u.id ? (
                       <div className="flex items-center gap-1">
@@ -1427,19 +1386,6 @@ function ConfiguracoesAdmin({ isMaster = false }: { isMaster?: boolean }) {
   }
 
   const items = [
-    {
-      grupo: 'Sistema',
-      adminOnly: true,
-      toggles: [
-        {
-          chave: 'email_funcoes_ativas',
-          titulo: 'Ativar funções de email',
-          descricao: 'Quando ligado, o cadastro exige confirmação por email e a recuperação de senha é feita pelo próprio usuário via email. Quando desligado, a recuperação de senha é feita pelo administrador (botão "Zerar Senha" na aba Usuários).',
-          ligado: 'Email de confirmação e recuperação ativos',
-          desligado: 'Sem email — recuperação via admin',
-        },
-      ],
-    },
     {
       grupo: 'Observações',
       adminOnly: true,

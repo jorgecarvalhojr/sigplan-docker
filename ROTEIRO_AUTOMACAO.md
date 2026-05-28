@@ -4,13 +4,13 @@ Instrução para o Agente: Execute os ciclos de teste abaixo utilizando o navega
 🏁 Ciclo 1: Identidade e Interface (Header e Dashboard)
 [ ] Teste 1.1: Setor no Header
 
-Ação: Logar com usuário vinculado a um setor (marciofmar@yahoo.com.br).
+Ação: Logar com usuário vinculado a um setor (usuario-teste@exemplo.com).
 
 Validação: Verificar se o código do setor aparece abaixo do nome no header.
 
 [ ] Teste 1.2: Admin sem Setor
 
-Ação: Logar como marciofmar@gmail.com
+Ação: Logar como admin-teste@exemplo.com
 
 Validação: Garantir que nenhum código de setor extra é exibido.
 
@@ -25,7 +25,7 @@ Interação: Clicar em "Painéis" e "Filtros", validar expansão, aplicar filtro
 👑 Ciclo 2: Perfil Master e Permissões Administrativas
 [ ] Teste 2.1: UI Perfil Master
 
-Ação: Logar como maradei.ictdec@gmail.com
+Ação: Logar como master-teste@exemplo.com
 
 Validação: Badge "Master" presente, botão "Gestão" visível.
 

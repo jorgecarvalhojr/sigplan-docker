@@ -21,19 +21,20 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const {
       nome, descricao, problema_resolve, setor_lider_id, data_inicio,
-      responsavel_id, tipo_acao, dependencias_projetos, indicador_sucesso,
+      responsavel_id, tipo_acao, dependencias_projetos, indicador_sucesso, recorrente,
       acoes_ids, indicadores, riscos, entregas: entregasData,
     } = body
 
     // Inserir projeto
     const [projeto] = await sql`
       INSERT INTO projetos (nome, descricao, problema_resolve, setor_lider_id, criado_por,
-        data_inicio, responsavel_id, tipo_acao, dependencias_projetos, indicador_sucesso)
+        data_inicio, responsavel_id, tipo_acao, dependencias_projetos, indicador_sucesso, recorrente)
       VALUES (
         ${nome}, ${descricao}, ${problema_resolve}, ${setor_lider_id}, ${user.id},
         ${data_inicio ?? null}, ${responsavel_id ?? null},
         ${tipo_acao ? sql.array(tipo_acao) : null},
-        ${dependencias_projetos ?? null}, ${indicador_sucesso ?? null}
+        ${dependencias_projetos ?? null}, ${indicador_sucesso ?? null},
+        ${recorrente ?? false}
       )
       RETURNING id
     `

@@ -105,6 +105,12 @@ export interface Projeto {
   setor_lider_id: number
   criado_por: string
   created_at: string
+  recorrente: boolean
+  prioridade?: 'alta' | 'media' | 'baixa' | null
+  impacto?: 'alto' | 'medio' | 'baixo' | null
+  condicao_execucao?: 'livre' | 'condicionada' | null
+  regime_acompanhamento?: 'intensivo' | 'regular' | null
+  observacao_relatorio?: string | null
 }
 
 export interface Entrega {
@@ -124,6 +130,8 @@ export interface Entrega {
   resultado_arquivo_nome?: string | null
   resultado_arquivo_tamanho?: number | null
   resultado_arquivo_enviado_em?: string | null
+  prioridade?: 'alta' | 'media' | 'baixa' | null
+  observacao_relatorio?: string | null
 }
 
 export interface Atividade {

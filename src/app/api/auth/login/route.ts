@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const { jwtVerify } = await import('jose')
-        const secret = new TextEncoder().encode(process.env.SESSION_SECRET || 'secret-padrao-temporario')
+        const secret = new TextEncoder().encode(process.env.SESSION_SECRET)
         const { payload }: any = await jwtVerify(challengeToken, secret)
         
         if (Number(challengeAnswer) !== payload.result) {

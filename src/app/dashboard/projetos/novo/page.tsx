@@ -77,6 +77,7 @@ export default function NovoProjetoPage() {
   const [eligibleUsers, setEligibleUsers] = useState<{ id: string; nome: string; email: string; role: string; setor_id: number | null; setor_codigo: string | null }[]>([])
   const [showGestorModal, setShowGestorModal] = useState<false | ('gestor' | 'usuario')[]>(false)
   const [dataInicio, setDataInicio] = useState('')
+  const [recorrente, setRecorrente] = useState(false)
 
   const router = useRouter()
 
@@ -400,6 +401,7 @@ export default function NovoProjetoPage() {
           setor_lider_id: setorLiderId,
           responsavel_id: responsavelId,
           data_inicio: dataInicio || null,
+          recorrente,
           dependencias_projetos: dependenciasProjetos.trim() || null,
           tipo_acao: tipoAcao.length > 0 ? tipoAcao : null,
           indicador_sucesso: null,
@@ -640,6 +642,14 @@ export default function NovoProjetoPage() {
                 <input type="date" value={dataInicio} onChange={e => setDataInicio(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all text-gray-700" />
                 <p className="text-xs text-gray-400 mt-1">Opcional. Entregas e atividades não poderão ter datas anteriores a esta.</p>
+              </div>
+              <div className="flex items-center pt-6">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={recorrente} onChange={e => setRecorrente(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
+                  <span className="text-sm text-gray-700 font-medium">Projeto recorrente</span>
+                  <span className="text-xs text-gray-400">(se repete periodicamente)</span>
+                </label>
               </div>
             </div>
 
