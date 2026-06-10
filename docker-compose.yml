@@ -11,9 +11,6 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
     volumes:
       - minio_data:/data
-    ports:
-      - "9000:9000"
-      - "9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
@@ -42,8 +39,6 @@ services:
   app:
     image: ${CI_REGISTRY_IMAGE:-sigplan}:${CI_COMMIT_SHA:-latest}
     env_file: .env
-    ports:
-      - "3000:3000"
     depends_on:
       minio:
         condition: service_healthy
