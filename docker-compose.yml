@@ -3,46 +3,14 @@
 # Em local: docker-compose up -d  (aplica override automaticamente)
 
 services:
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
-    volumes:
-      - minio_data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    restart: unless-stopped
-
-  createbuckets:
-    image: minio/mc:latest
-    env_file: .env.local
-    environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_BUCKET_RESULTADOS: ${MINIO_BUCKET_RESULTADOS}
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-        mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY};
-        mc mb --ignore-existing local/${MINIO_BUCKET_RESULTADOS};
-        mc anonymous set none local/${MINIO_BUCKET_RESULTADOS};
-        echo 'Bucket ${MINIO_BUCKET_RESULTADOS} pronto.';
-      "
-
   app:
     image: ${CI_REGISTRY_IMAGE:-sigplan}:${CI_COMMIT_SHA:-latest}
     env_file: .env
-    depends_on:
-      minio:
-        condition: service_healthy
+    volumes:
+      # Armazenamento local dos PDFs de "Resultados e Produtos" — persistido
+      # no volume Docker, sem depender de serviços ou infra externos.
+      - resultados_data:/app/storage
     restart: unless-stopped
 
 volumes:
-  minio_data:
+  resultados_data:

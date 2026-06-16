@@ -1,11 +1,11 @@
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
-import { getResultadoSignedUrl } from '@/lib/resultados-storage'
+import { getResultadoObjectData } from '@/lib/resultados-storage'
 
-// Rota estável de download. Verifica autenticação e redireciona para
-// uma signed URL curta. Ao migrar para hospedagem institucional, esta
-// rota passa a servir o arquivo por outro mecanismo sem quebrar links.
+// Rota estável de download atuando como Proxy.
+// Valida a autenticação, lê o arquivo do volume local do Docker
+// e retorna via stream de bytes, sem expor caminho de disco.
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession()
@@ -23,11 +23,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'path inválido' }, { status: 400 })
     }
 
-    const url = await getResultadoSignedUrl(path, 60)
-    return NextResponse.redirect(url)
+    const fileData = await getResultadoObjectData(path)
+    
+    return new NextResponse(fileData.buffer, {
+      status: 200,
+      headers: {
+        'Content-Type': fileData.contentType,
+        'Content-Length': fileData.contentLength.toString(),
+        'Content-Disposition': `inline; filename="${path.split('/').pop()}"`
+      }
+    })
   } catch (err: any) {
     return NextResponse.json(
-      { error: err?.message || 'Erro interno' },
+      { error: err?.message || 'Erro interno ao obter arquivo' },
       { status: 500 }
     )
   }

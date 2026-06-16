@@ -1,44 +1,26 @@
 /**
  * Módulo único de acesso ao storage de "Resultados e Produtos".
  *
- * Backend migrado de Supabase Storage → MinIO (S3-compatible).
- * A interface pública (funções exportadas) permanece IDÊNTICA —
- * nenhuma rota de API ou componente de UI precisa mudar.
+ * Backend: sistema de arquivos local, persistido num volume Docker
+ * (`resultados_data:/app/storage`). Não depende de nenhum serviço
+ * externo (S3, MinIO, etc.) nem de configurações extras de rede/infra —
+ * tudo fica contido no próprio container/volume do Docker.
  *
  *  - O banco guarda apenas um `path` lógico relativo (ex.
- *    `entregas/42/7d3f…b91.pdf`), nunca URLs do provedor.
+ *    `entregas/42/7d3f…b91.pdf`), nunca caminhos absolutos.
  *  - A UI linka sempre para `/api/resultados/download?path=...`
  *  - Uploads passam por `/api/resultados/upload`
  */
 
-import {
-  S3Client,
-  PutObjectCommand,
-  DeleteObjectsCommand,
-  GetObjectCommand,
-} from '@aws-sdk/client-s3'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { promises as fs } from 'fs'
+import path from 'path'
 
-// ─── Configuração do cliente S3/MinIO ────────────────────────────────────────
+// ─── Configuração do diretório de armazenamento ──────────────────────────────
 
-function createS3Client(customEndpoint?: string) {
-  const endpoint = customEndpoint || process.env.MINIO_ENDPOINT
-  if (!endpoint) throw new Error('MINIO_ENDPOINT não definida')
-
-  return new S3Client({
-    endpoint,
-    region: process.env.MINIO_REGION || 'us-east-1', // MinIO ignora, mas SDK exige
-    credentials: {
-      accessKeyId: process.env.MINIO_ACCESS_KEY!,
-      secretAccessKey: process.env.MINIO_SECRET_KEY!,
-    },
-    forcePathStyle: true, // OBRIGATÓRIO para MinIO (bucket no path, não no host)
-  })
-}
+const STORAGE_ROOT = process.env.RESULTADOS_STORAGE_DIR || '/app/storage/resultados'
 
 // ─── Constantes públicas ──────────────────────────────────────────────────────
 
-export const RESULTADOS_BUCKET = process.env.MINIO_BUCKET_RESULTADOS || 'resultados'
 export const RESULTADOS_MAX_BYTES = 4 * 1024 * 1024 // 4 MB
 export const RESULTADOS_ALLOWED_MIME = 'application/pdf'
 
@@ -77,10 +59,24 @@ function sanitizeOriginalName(name: string): string {
   return base.length > 180 ? base.slice(0, 180) : base
 }
 
+/**
+ * Resolve um path lógico relativo para um caminho absoluto dentro de
+ * STORAGE_ROOT, recusando qualquer tentativa de escapar do diretório
+ * (ex. via `../`).
+ */
+function resolveSafePath(relPath: string): string {
+  const root = path.resolve(STORAGE_ROOT)
+  const full = path.resolve(root, relPath)
+  if (full !== root && !full.startsWith(root + path.sep)) {
+    throw new Error('Path inválido.')
+  }
+  return full
+}
+
 // ─── Interface pública ────────────────────────────────────────────────────────
 
 /**
- * Faz upload do PDF para o MinIO.
+ * Salva o PDF em disco, dentro do volume de storage.
  * Deve ser chamado apenas no server (rota de API).
  */
 export async function uploadResultadoPDF(
@@ -102,20 +98,15 @@ export async function uploadResultadoPDF(
     throw new Error('Arquivo vazio.')
   }
 
-  const s3 = createS3Client()
-  const path = `${ownerPrefix(owner)}/${randomId()}.pdf`
+  const relPath = `${ownerPrefix(owner)}/${randomId()}.pdf`
+  const fullPath = resolveSafePath(relPath)
   const buffer = Buffer.from(await file.arrayBuffer())
 
-  await s3.send(new PutObjectCommand({
-    Bucket: RESULTADOS_BUCKET,
-    Key: path,
-    Body: buffer,
-    ContentType: RESULTADOS_ALLOWED_MIME,
-    ContentLength: file.size,
-  }))
+  await fs.mkdir(path.dirname(fullPath), { recursive: true })
+  await fs.writeFile(fullPath, buffer)
 
   return {
-    path,
+    path: relPath,
     nome: sanitizeOriginalName(file.name) || 'arquivo.pdf',
     tamanho: file.size,
   }
@@ -125,43 +116,30 @@ export async function uploadResultadoPDF(
  * Remove um arquivo pelo path lógico.
  * Falhas são ignoradas para não bloquear remoção de metadados no banco.
  */
-export async function deleteResultadoPDF(path: string): Promise<void> {
-  if (!path) return
+export async function deleteResultadoPDF(relPath: string): Promise<void> {
+  if (!relPath) return
   try {
-    const s3 = createS3Client()
-    await s3.send(new DeleteObjectsCommand({
-      Bucket: RESULTADOS_BUCKET,
-      Delete: {
-        Objects: [{ Key: path }],
-        Quiet: true,
-      },
-    }))
+    const fullPath = resolveSafePath(relPath)
+    await fs.unlink(fullPath)
   } catch {
-    // Ignorar falhas — pior caso: arquivo órfão no bucket
+    // Ignorar falhas — pior caso: arquivo órfão no volume
   }
 }
 
 /**
- * Gera uma URL assinada de curta duração para download.
- * A rota `/api/resultados/download` redireciona o usuário para essa URL.
+ * Lê o arquivo diretamente do disco e retorna seus bytes e metadados.
  */
-export async function getResultadoSignedUrl(
-  path: string,
-  ttlSeconds: number = 60
-): Promise<string> {
-  if (!path) throw new Error('Path obrigatório.')
+export async function getResultadoObjectData(relPath: string): Promise<{ buffer: Uint8Array, contentType: string, contentLength: number }> {
+  if (!relPath) throw new Error('Path obrigatório.')
 
-  // Para gerar a URL assinada, usamos o endpoint externo (ex.: localhost)
-  // se disponível, para que o navegador consiga acessar.
-  const endpoint = process.env.MINIO_ENDPOINT_EXTERNAL || process.env.MINIO_ENDPOINT
-  const s3 = createS3Client(endpoint)
-  const command = new GetObjectCommand({
-    Bucket: RESULTADOS_BUCKET,
-    Key: path,
-  })
+  const fullPath = resolveSafePath(relPath)
+  const buffer = await fs.readFile(fullPath)
 
-  const url = await getSignedUrl(s3, command, { expiresIn: ttlSeconds })
-  return url
+  return {
+    buffer,
+    contentType: RESULTADOS_ALLOWED_MIME,
+    contentLength: buffer.length,
+  }
 }
 
 /**

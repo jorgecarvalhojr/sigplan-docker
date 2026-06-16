@@ -35,16 +35,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
-        condition: service_healthy
     # Nota: hot-reload via volume só funciona com `next dev`.
     # Para dev com hot-reload, prefira rodar `npm run dev` fora do Docker
-    # e usar apenas postgres + minio em container.
-
-  minio:
-    ports:
-      - "9010:9000"
-      - "9011:9001"
+    # e usar apenas postgres em container.
 
 volumes:
   postgres_data:
