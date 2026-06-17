@@ -23,7 +23,7 @@ COPY --from=builder /app/.next/static ./.next/static
 
 # Diretório de armazenamento dos PDFs de "Resultados e Produtos".
 # Em produção/local é montado como volume Docker (resultados_data:/app/storage).
-RUN mkdir -p /app/storage/resultados
+RUN mkdir -p /app/storage/resultados /app/logs
 
 EXPOSE 3000
 ENV PORT=3000

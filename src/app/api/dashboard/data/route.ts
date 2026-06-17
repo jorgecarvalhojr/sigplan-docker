@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 import { NextResponse } from 'next/server'
 import sql from '@/lib/db'
 import { getSession } from '@/lib/session'
@@ -43,7 +44,7 @@ export async function GET() {
       fichaSetores
     })
   } catch (error) {
-    console.error('Dashboard Data Error:', error)
+    logger.error('Dashboard Data Error:', error)
     return NextResponse.json({ error: 'Erro ao carregar dados do dashboard' }, { status: 500 })
   }
 }

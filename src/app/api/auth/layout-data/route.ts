@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
@@ -113,7 +114,7 @@ export async function GET() {
     })
 
   } catch (error) {
-    console.error('Layout Data API Error:', error)
+    logger.error('Layout Data API Error:', error)
     return NextResponse.json({ error: 'Erro ao carregar dados do layout' }, { status: 500 })
   }
 }

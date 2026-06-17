@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { autenticarCbmerj } from '@/lib/cbmerj-auth'
@@ -133,7 +134,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
-    console.error('Login Route Error:', error)
+    logger.error('Login Route Error:', error)
     return NextResponse.json(
       { error: 'Erro interno no servidor' },
       { status: 500 }

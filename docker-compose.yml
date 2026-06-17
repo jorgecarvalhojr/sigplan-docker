@@ -10,7 +10,9 @@ services:
       # Armazenamento local dos PDFs de "Resultados e Produtos" — persistido
       # no volume Docker, sem depender de serviços ou infra externos.
       - resultados_data:/app/storage
+      - logs_data:/app/logs
     restart: unless-stopped
 
 volumes:
   resultados_data:
+  logs_data:

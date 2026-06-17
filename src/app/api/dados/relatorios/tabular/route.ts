@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 /**
  * GET  /api/dados/relatorios/tabular  — dados consolidados para o relatório tabular
  * PATCH /api/dados/relatorios/tabular — salva um campo editável de projeto ou entrega
@@ -139,7 +140,7 @@ export async function GET(request: NextRequest) {
       projetos,
     })
   } catch (err: any) {
-    console.error('[API tabular GET]', err)
+    logger.error('[API tabular GET]', err)
     return NextResponse.json({ error: err.message || 'Erro interno' }, { status: 500 })
   }
 }
@@ -201,7 +202,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ ok: true })
   } catch (err: any) {
-    console.error('[API tabular PATCH]', err)
+    logger.error('[API tabular PATCH]', err)
     return NextResponse.json({ error: err.message || 'Erro interno' }, { status: 500 })
   }
 }

@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import sql from '@/lib/db'
@@ -83,7 +84,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ projetos: result, namesMap })
   } catch (error: any) {
-    console.error('Full Project Data Error:', error)
+    logger.error('Full Project Data Error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

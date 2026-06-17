@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 export const dynamic = 'force-dynamic'
 /**
  * GET /api/dados/projeto/[id]
@@ -134,13 +135,13 @@ export async function GET(request: NextRequest, { params }: Params) {
     try {
       JSON.stringify(responseData)
     } catch (serializeErr) {
-      console.error('Serialization error:', serializeErr)
+      logger.error('Serialization error:', serializeErr)
       throw serializeErr
     }
 
     return NextResponse.json(responseData)
   } catch (err: any) {
-    console.error('GET /api/dados/projeto error:', err)
+    logger.error('GET /api/dados/projeto error:', err)
     return NextResponse.json({ error: err.message || 'Erro interno' }, { status: 500 })
   }
 }
@@ -372,7 +373,7 @@ export async function POST(request: NextRequest, { params }: Params) {
         return NextResponse.json({ error: `Action desconhecida: ${action}` }, { status: 400 })
     }
   } catch (err: any) {
-    console.error('POST /api/dados/projeto error:', err)
+    logger.error('POST /api/dados/projeto error:', err)
     return NextResponse.json({ error: err.message || 'Erro interno' }, { status: 500 })
   }
 }

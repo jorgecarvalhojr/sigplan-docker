@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import sql from '@/lib/db'
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(result)
   } catch (error: any) {
-    console.error('Messages GET Error:', error)
+    logger.error('Messages GET Error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
@@ -79,7 +80,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, id: msg.id, created_at: msg.created_at })
   } catch (error: any) {
-    console.error('Messages POST Error:', error)
+    logger.error('Messages POST Error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

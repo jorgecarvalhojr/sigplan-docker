@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { encrypt } from '@/lib/session'
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
-    console.error('Register Route Error:', error)
+    logger.error('Register Route Error:', error)
     return NextResponse.json(
       { error: 'Erro interno ao realizar cadastro' },
       { status: 500 }

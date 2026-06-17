@@ -1,3 +1,4 @@
+import logger from '@/lib/logger'
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/session'
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err: any) {
-    console.error('[Push Subscribe] Exceção:', err)
+    logger.error('[Push Subscribe] Exceção:', err)
     return NextResponse.json({ error: 'Erro interno' }, { status: 500 })
   }
 }
