@@ -7,7 +7,11 @@ RUN npm ci
 
 # Copiar código e buildar
 COPY . .
-ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
+ENV DB_HOST="localhost"
+ENV DB_PORT="5432"
+ENV DB_NAME="dummy"
+ENV DB_USER="dummy"
+ENV DB_PASSWORD="dummy"
 RUN npm run build
 
 # ---- Runner ----
