@@ -39,6 +39,9 @@ deploy-local:
   before_script:
     - apk add --no-cache gettext docker-compose
   script:
+    # DEV_DB_HOST é cadastrada separada de PROD_DB_HOST no GitLab (hosts distintos);
+    # o template espera DB_HOST, então mapeamos aqui antes do envsubst.
+    - export DB_HOST="$DEV_DB_HOST"
     # Gera .env a partir do template com variáveis do GitLab
     - envsubst < .env.template > .env
     # Sobe apenas os serviços de base (sem postgres — só em prod local)
@@ -66,6 +69,9 @@ deploy-prod:
     - echo "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
     - chmod 644 ~/.ssh/known_hosts
   script:
+    # PROD_DB_HOST é cadastrada separada de DEV_DB_HOST no GitLab (hosts distintos);
+    # o template espera DB_HOST, então mapeamos aqui antes do envsubst.
+    - export DB_HOST="$PROD_DB_HOST"
     # Gera .env local com variáveis do ambiente production
     - envsubst < .env.template > .env.prod
     # Copia arquivos necessários para o servidor
