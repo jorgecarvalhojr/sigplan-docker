@@ -1,6 +1,9 @@
-# docker-compose.yml — Configuração BASE (Produção)
-# Em produção: docker-compose -f docker-compose.yml up -d
+# docker-compose.yml — Configuração BASE (usada apenas em desenvolvimento local)
 # Em local: docker-compose up -d  (aplica override automaticamente)
+#
+# Produção e homologação não usam mais este arquivo: o deploy é feito via
+# ArgoCD/Kubernetes (ver .gitlab-ci.yml), que gerencia o Deployment com suas
+# próprias secrets/configmaps e volumes persistentes no cluster.
 
 services:
   app:

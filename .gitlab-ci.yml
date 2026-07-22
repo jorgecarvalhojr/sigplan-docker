@@ -1,116 +1,81 @@
+variables:
+  ARGOCD_PROJECT: ${ARGOCD_PROJECT}
+  CONTAINER_NAME: ${CONTAINER_NAME}
+
 stages:
   - build
-  - deploy-local
-  - deploy-prod
+  - deploy
 
 # ─────────────────────────────────────────────
-# BUILD — Constrói e envia imagem para o registry GitLab via Kaniko
-# Kaniko builda sem precisar de um daemon Docker (nada de dind/privileged) —
-# necessário porque os runners não têm o executor Docker em modo privileged
-# e não há acesso SSH aos hosts dos runners para habilitar isso.
-# Dividido em dois jobs porque cada branch usa um runner com tag distinta
-# (ubuntu-docker-dev / ubuntu-docker-prd) — ver Settings > CI/CD > Runners.
+# BUILD — Kaniko builda a imagem e envia ao registry do GitLab.
+# Sem docker-compose/SSH: o deploy é feito pelo ArgoCD, que gerencia o
+# Deployment no Kubernetes (env vars via Secret/ConfigMap próprios do
+# cluster, fora deste repositório). Mesmo padrão usado pelo GECAD.
 # ─────────────────────────────────────────────
-build-dev:
+.build_template:
   stage: build
   image:
-    name: gcr.io/kaniko-project/executor:v1.9.0-debug
+    name: gcr.io/kaniko-project/executor:debug
     entrypoint: [""]
-  tags:
-    - ubuntu-docker-dev
   script:
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(printf "%s:%s" "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
-    - /kaniko/executor
-      --context "$CI_PROJECT_DIR"
-      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
-      --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-      --destination "$CI_REGISTRY_IMAGE:latest"
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+    - echo -n $REGISTRY_CA_CERT | base64 -d > /kaniko/ssl/certs/additional-ca-cert-bundle.crt
+    - |
+      /kaniko/executor \
+        --context $CI_PROJECT_DIR \
+        --dockerfile $CI_PROJECT_DIR/Dockerfile \
+        --destination $CI_REGISTRY_IMAGE/$CONTAINER_NAME:${CI_COMMIT_REF_NAME} \
+        --single-snapshot \
+        --use-new-run \
+        --compressed-caching=false \
+        --cache=false \
+        --cleanup
+  tags:
+    - ubuntu-docker-dev
+
+# ─────────────────────────────────────────────
+# DEPLOY — Aciona o ArgoCD para reiniciar o Deployment e puxar a imagem
+# recém publicada (imagePullPolicy: Always no manifesto do cluster).
+# ─────────────────────────────────────────────
+.deploy_template:
+  stage: deploy
+  image: argoproj/argocd
+  script:
+    - argocd --grpc-web login "${TARGET_ARGOCD_SERVER}" --insecure --username "${ARGOCD_USERNAME}" --password "${ARGOCD_PASSWORD}"
+    - argocd --grpc-web app actions run "${ARGOCD_PROJECT}" restart --kind Deployment --resource-name "${ARGOCD_PROJECT}"
+  tags:
+    - ubuntu-docker-dev
+
+# ----------------------------------------
+# Jobs para Develop (Homologação)
+# ----------------------------------------
+build-dev:
+  extends: .build_template
   only:
     - develop
 
+deploy-dev:
+  extends: .deploy_template
+  variables:
+    TARGET_ARGOCD_SERVER: ${ARGOCD_DEV_SERVER}
+  needs: [build-dev]
+  only:
+    - develop
+
+# ----------------------------------------
+# Jobs para Produção (Main)
+# ----------------------------------------
 build-prod:
-  stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.9.0-debug
-    entrypoint: [""]
-  tags:
-    - ubuntu-docker-prd
-  script:
-    - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(printf "%s:%s" "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
-    - /kaniko/executor
-      --context "$CI_PROJECT_DIR"
-      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
-      --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-      --destination "$CI_REGISTRY_IMAGE:latest"
+  extends: .build_template
   only:
     - main
 
-# ─────────────────────────────────────────────
-# DEPLOY LOCAL — Ambiente de homologação local
-# Ativado em: develop (automático)
-# Variáveis GitLab: ambiente "local"
-# ─────────────────────────────────────────────
-deploy-local:
-  stage: deploy-local
-  image: alpine:latest
-  environment:
-    name: local
-  tags:
-    - ubuntu-docker-dev
-  before_script:
-    - apk add --no-cache gettext docker-compose
-  script:
-    # DEV_DB_HOST é cadastrada separada de PROD_DB_HOST no GitLab (hosts distintos);
-    # o template espera DB_HOST, então mapeamos aqui antes do envsubst.
-    - export DB_HOST="$DEV_DB_HOST"
-    # Gera .env a partir do template com variáveis do GitLab
-    - envsubst < .env.template > .env
-    # Sobe apenas os serviços de base (sem postgres — só em prod local)
-    # Para local com postgres em Docker, o override.yml é aplicado manualmente
-    - docker-compose -f docker-compose.yml pull app
-    - docker-compose -f docker-compose.yml up -d --no-build
-  only:
-    - develop
-
-# ─────────────────────────────────────────────
-# DEPLOY PRODUÇÃO — Servidor externo via SSH
-# Ativado em: main (manual)
-# Variáveis GitLab: ambiente "production"
-# ─────────────────────────────────────────────
 deploy-prod:
-  stage: deploy-prod
-  image: alpine:latest
-  environment:
-    name: production
-  tags:
-    - ubuntu-docker-prd
-  before_script:
-    - apk add --no-cache openssh-client gettext
-    - eval $(ssh-agent -s)
-    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - echo "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
-    - chmod 644 ~/.ssh/known_hosts
-  script:
-    # PROD_DB_HOST é cadastrada separada de DEV_DB_HOST no GitLab (hosts distintos);
-    # o template espera DB_HOST, então mapeamos aqui antes do envsubst.
-    - export DB_HOST="$PROD_DB_HOST"
-    # Gera .env local com variáveis do ambiente production
-    - envsubst < .env.template > .env.prod
-    # Copia arquivos necessários para o servidor
-    - scp .env.prod $PROD_USER@$PROD_HOST:$PROD_DIR/.env
-    - scp docker-compose.yml $PROD_USER@$PROD_HOST:$PROD_DIR/docker-compose.yml
-    # Login no registry e deploy no servidor
-    - |
-      ssh $PROD_USER@$PROD_HOST "
-        cd $PROD_DIR &&
-        docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
-        docker-compose -f docker-compose.yml pull &&
-        docker-compose -f docker-compose.yml up -d --remove-orphans &&
-        docker image prune -f
-      "
+  extends: .deploy_template
+  variables:
+    TARGET_ARGOCD_SERVER: ${ARGOCD_PROD_SERVER}
+  needs: [build-prod]
   only:
     - main
   when: manual
