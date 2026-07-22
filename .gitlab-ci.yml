@@ -37,6 +37,10 @@ stages:
 # ─────────────────────────────────────────────
 # DEPLOY — Aciona o ArgoCD para reiniciar o Deployment e puxar a imagem
 # recém publicada (imagePullPolicy: Always no manifesto do cluster).
+# allow_failure: o restart pode falhar por permissão RBAC do usuário no
+# ArgoCD (mesmo comportamento observado no GECAD) sem impedir que o
+# cluster sincronize a nova imagem por conta própria — não deixamos isso
+# travar o pipeline.
 # ─────────────────────────────────────────────
 .deploy_template:
   stage: deploy
@@ -46,6 +50,7 @@ stages:
     - argocd --grpc-web app actions run "${ARGOCD_PROJECT}" restart --kind Deployment --resource-name "${ARGOCD_PROJECT}"
   tags:
     - ubuntu-docker-dev
+  allow_failure: true
 
 # ----------------------------------------
 # Jobs para Develop (Homologação)
