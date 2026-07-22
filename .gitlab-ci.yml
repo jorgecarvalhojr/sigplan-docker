@@ -3,44 +3,47 @@ stages:
   - deploy-local
   - deploy-prod
 
-variables:
-  DOCKER_DRIVER: overlay2
-  DOCKER_TLS_CERTDIR: "/certs"
-
 # ─────────────────────────────────────────────
-# BUILD — Constrói e envia imagem para o registry GitLab
+# BUILD — Constrói e envia imagem para o registry GitLab via Kaniko
+# Kaniko builda sem precisar de um daemon Docker (nada de dind/privileged) —
+# necessário porque os runners não têm o executor Docker em modo privileged
+# e não há acesso SSH aos hosts dos runners para habilitar isso.
 # Dividido em dois jobs porque cada branch usa um runner com tag distinta
 # (ubuntu-docker-dev / ubuntu-docker-prd) — ver Settings > CI/CD > Runners.
 # ─────────────────────────────────────────────
 build-dev:
   stage: build
-  image: docker:24
-  services:
-    - docker:24-dind
+  image:
+    name: gcr.io/kaniko-project/executor:v1.9.0-debug
+    entrypoint: [""]
   tags:
     - ubuntu-docker-dev
-  before_script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   script:
-    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" -t "$CI_REGISTRY_IMAGE:latest" .
-    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-    - docker push "$CI_REGISTRY_IMAGE:latest"
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(printf "%s:%s" "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+      --destination "$CI_REGISTRY_IMAGE:latest"
   only:
     - develop
 
 build-prod:
   stage: build
-  image: docker:24
-  services:
-    - docker:24-dind
+  image:
+    name: gcr.io/kaniko-project/executor:v1.9.0-debug
+    entrypoint: [""]
   tags:
     - ubuntu-docker-prd
-  before_script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   script:
-    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" -t "$CI_REGISTRY_IMAGE:latest" .
-    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-    - docker push "$CI_REGISTRY_IMAGE:latest"
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(printf "%s:%s" "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/Dockerfile"
+      --destination "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+      --destination "$CI_REGISTRY_IMAGE:latest"
   only:
     - main
 
