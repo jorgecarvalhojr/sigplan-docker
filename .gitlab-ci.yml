@@ -47,7 +47,17 @@ stages:
   image: argoproj/argocd
   script:
     - argocd --grpc-web login "${TARGET_ARGOCD_SERVER}" --insecure --username "${ARGOCD_USERNAME}" --password "${ARGOCD_PASSWORD}"
-    - argocd --grpc-web app actions run "${ARGOCD_PROJECT}" restart --kind Deployment --resource-name "${ARGOCD_PROJECT}"
+    # Diagnóstico — não exige nenhuma permissão além do login, ajuda a
+    # confirmar se a Application existe e qual o RBAC disponível para
+    # o devuser antes de tentar a ação de restart.
+    - echo "--- Apps visíveis para devuser ---"
+    - argocd --grpc-web app list || true
+    - echo "--- Detalhes da app $ARGOCD_PROJECT ---"
+    - argocd --grpc-web app get "${ARGOCD_PROJECT}" || true
+    # Tenta restart (força repull da imagem); se RBAC não permitir,
+    # tenta sync como alternativa (verbo de permissão geralmente mais
+    # básico que "action").
+    - argocd --grpc-web app actions run "${ARGOCD_PROJECT}" restart --kind Deployment --resource-name "${ARGOCD_PROJECT}" || argocd --grpc-web app sync "${ARGOCD_PROJECT}"
   tags:
     - ubuntu-docker-dev
   allow_failure: true
